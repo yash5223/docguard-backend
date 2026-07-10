@@ -1,0 +1,104 @@
+require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const path = require('path'); // ADD THIS LINE
+const userRoutes = require('./routes/userRoutes');
+const scanReceiptRoutes = require('./routes/scanReceipt');
+const assetRoutes = require('./routes/assetRoutes');
+const vaultRoutes = require('./routes/vaultRoutes');
+const Invite = require('./models/Invite');
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+const PORT = process.env.PORT || 3000;
+const MONGODB_URI = process.env.MONGODB_URI;
+mongoose.connect(MONGODB_URI)
+  .then(() => console.log('Connected to MongoDB Atlas'))
+  .catch((err) => console.error('Connection error:', err));
+app.get('/', (req, res) => {
+  res.send('Server is running');
+});
+
+// Landing page for shared invite links, e.g. https://<your-host>/join/<token>
+// Opened in a plain browser (that's what happens when someone taps a shared link),
+// so this has to be an HTML page, not a JSON API response.
+app.get('/join/:token', async (req, res) => {
+  const { token } = req.params;
+  let statusMessage = 'This invite link is invalid.';
+  let statusOk = false;
+
+  try {
+    const invite = await Invite.findOne({ token });
+    if (invite) {
+      if (invite.status === 'accepted') {
+        statusMessage = 'This invite has already been used.';
+      } else if (invite.status === 'revoked' || invite.expiresAt < new Date()) {
+        statusMessage = 'This invite link has expired or was revoked.';
+      } else {
+        statusOk = true;
+        statusMessage = `You've been invited to join a DocGuard family vault as ${invite.role}.`;
+      }
+    }
+  } catch (err) {
+    statusMessage = 'Something went wrong checking this invite.';
+  }
+
+  // Attempts to hand off to the app via a custom URL scheme first.
+  // Update DEEP_LINK_SCHEME once the Flutter app registers its own scheme
+  // (e.g. docguard://join/<token>) in AndroidManifest.xml / Info.plist.
+  const deepLink = `docguard://join/${token}`;
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Join DocGuard Vault</title>
+<style>
+  body { font-family: -apple-system, Roboto, Arial, sans-serif; background:#FAFAFB; color:#0B1F3D;
+         display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; padding:24px; }
+  .card { max-width:420px; width:100%; background:#fff; border-radius:16px; padding:32px 24px;
+          box-shadow:0 4px 24px rgba(0,0,0,0.08); text-align:center; }
+  h1 { font-size:22px; margin-bottom:12px; }
+  p { font-size:15px; color:#4A5568; line-height:1.5; }
+  .token { font-family:monospace; background:#F1F3F6; border-radius:8px; padding:10px 14px;
+           margin:16px 0; font-size:14px; word-break:break-all; }
+  button { background:#0B1F3D; color:#fff; border:none; border-radius:10px; padding:12px 20px;
+           font-size:15px; cursor:pointer; width:100%; margin-top:8px; }
+  button.secondary { background:#fff; color:#0B1F3D; border:1px solid #D8DCE3; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>DocGuard</h1>
+    <p>${statusMessage}</p>
+    ${statusOk ? `
+      <div class="token" id="tokenBox">${token}</div>
+      <button onclick="window.location.href='${deepLink}'">Open in DocGuard app</button>
+      <button class="secondary" onclick="copyToken()">Copy invite code</button>
+      <p style="font-size:13px; margin-top:16px;">
+        If the app doesn't open automatically, open DocGuard and enter this code
+        on the "Join Vault" screen.
+      </p>
+    ` : ''}
+  </div>
+  <script>
+    function copyToken() {
+      navigator.clipboard.writeText(${JSON.stringify(token)});
+      alert('Invite code copied');
+    }
+    // Best-effort auto-attempt to open the app once, on load.
+    ${statusOk ? `window.location.href = ${JSON.stringify(deepLink)};` : ''}
+  </script>
+</body>
+</html>`);
+});
+app.use('/api/users', userRoutes);
+app.use('/api/receipt', scanReceiptRoutes);
+app.use('/api/assets', assetRoutes);
+app.use('/api/vault', vaultRoutes);
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
