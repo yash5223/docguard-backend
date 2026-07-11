@@ -73,7 +73,7 @@ router.post('/login', async (req, res) => {
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     
     if (!user) {
-      return res.status(444).json({ error: 'No account found with this email.' });
+      return res.status(404).json({ error: 'No account found with this email.' });
     }
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -104,7 +104,7 @@ router.post('/forgot-password/request', async (req, res) => {
     });
 
     if (!user) {
-      return res.status(444).json({ error: 'No account associated with that contact.' });
+      return res.status(404).json({ error: 'No account associated with that contact.' });
     }
 
     if (!cleanContact.includes('@')) {
@@ -199,7 +199,7 @@ router.post('/set-pin', async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
-      return res.status(444).json({ error: 'No account found with this email.' });
+      return res.status(404).json({ error: 'No account found with this email.' });
     }
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -228,7 +228,7 @@ router.post('/verify-pin', async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
-      return res.status(444).json({ error: 'No account found with this email.' });
+      return res.status(404).json({ error: 'No account found with this email.' });
     }
 
     if (!user.pinEnabled || !user.pinHash) {
@@ -256,7 +256,7 @@ router.post('/remove-pin', async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
-      return res.status(444).json({ error: 'No account found with this email.' });
+      return res.status(404).json({ error: 'No account found with this email.' });
     }
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -284,7 +284,7 @@ router.get('/pin-status', async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
-      return res.status(444).json({ error: 'No account found with this email.' });
+      return res.status(404).json({ error: 'No account found with this email.' });
     }
 
     res.status(200).json({ success: true, pinEnabled: !!user.pinEnabled });
