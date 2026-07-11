@@ -19,11 +19,6 @@ app.use(express.json());
 // 2. Logging Middleware (Placed here so it logs EVERYTHING below)
 app.use((req, res, next) => {
   console.log(`[${req.method}] ${req.url}`);
-  if (req.method === 'POST' || req.method === 'PUT') {
-    req.on('data', (chunk) => {
-      console.log('Body:', chunk.toString());
-    });
-  }
   next();
 });
 
