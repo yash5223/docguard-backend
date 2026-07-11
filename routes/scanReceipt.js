@@ -60,9 +60,16 @@ function parseInvoice(text) {
 
 router.post('/scan-receipt', upload.single('image'), async (req, res) => {
   let processedImagePath = null;
-  
+
   try {
     if (!req.file) { return res.status(400).json({ error: 'No image uploaded' }); }
+
+    const trainedDataPath = path.join(__dirname, '..', 'eng.traineddata');
+    if (!fs.existsSync(trainedDataPath)) {
+      console.error(`[OCR] FATAL: eng.traineddata not found at ${trainedDataPath}. It must be committed to git and present in the deployed repo.`);
+      return res.status(500).json({ error: 'OCR language data missing on server (eng.traineddata not found).' });
+    }
+    console.log(`[OCR] Using trained data at ${trainedDataPath} (${fs.statSync(trainedDataPath).size} bytes)`);
 
     processedImagePath = path.join(uploadDir, `proc_${req.file.filename}.png`);
     await sharp(req.file.path)
@@ -87,6 +94,9 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
       const { data } = await worker.recognize(processedImagePath);
       rawText = data.text || '';
       ocrConfidence = data.confidence || 0;
+    } catch (ocrErr) {
+      console.error('[OCR] worker.recognize threw:', ocrErr);
+      throw ocrErr;
     } finally {
       await worker.terminate();
     }
