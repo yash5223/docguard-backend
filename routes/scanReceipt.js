@@ -74,14 +74,29 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
       .png()
       .toFile(processedImagePath);
 
-    const { data } = await Tesseract.recognize(processedImagePath, 'eng');
-    const rawText = data.text;
+    const worker = await Tesseract.createWorker('eng', 1, {
+      langPath: path.join(__dirname, '..'),
+      gzip: false,
+      logger: (m) => {
+        if (m.status && m.progress === 1) console.log(`[OCR] ${m.status} done`);
+      },
+    });
+    let rawText = '';
+    let ocrConfidence = 0;
+    try {
+      const { data } = await worker.recognize(processedImagePath);
+      rawText = data.text || '';
+      ocrConfidence = data.confidence || 0;
+    } finally {
+      await worker.terminate();
+    }
+    console.log(`[OCR] extracted ${rawText.trim().length} chars, confidence ${ocrConfidence}`);
 
     fs.unlink(req.file.path, () => {});
     fs.unlink(processedImagePath, () => {});
 
-    if (!rawText || !rawText.trim()) { 
-      return res.status(200).json({ success: true, extracted: false }); 
+    if (!rawText || !rawText.trim()) {
+      return res.status(200).json({ success: true, extracted: false });
     }
 
     let parsed = parseInvoice(rawText);
