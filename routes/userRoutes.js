@@ -149,4 +149,111 @@ router.post('/forgot-password/reset', async (req, res) => {
   }
 });
 
+// 6. SET / UPDATE 2FA PIN
+router.post('/set-pin', async (req, res) => {
+  try {
+    const { email, password, pin } = req.body;
+    if (!email || !password || !pin) {
+      return res.status(400).json({ error: 'Email, password and pin are required.' });
+    }
+    if (!/^\d{4,6}$/.test(pin)) {
+      return res.status(400).json({ error: 'PIN must be 4 to 6 digits.' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      return res.status(444).json({ error: 'No account found with this email.' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(400).json({ error: 'Incorrect password.' });
+    }
+
+    const hashedPin = await bcrypt.hash(pin, 10);
+    user.pinHash = hashedPin;
+    user.pinEnabled = true;
+    await user.save();
+
+    res.status(200).json({ success: true, message: '2FA PIN saved successfully.', pinEnabled: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. VERIFY 2FA PIN
+router.post('/verify-pin', async (req, res) => {
+  try {
+    const { email, pin } = req.body;
+    if (!email || !pin) {
+      return res.status(400).json({ error: 'Email and pin are required.' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      return res.status(444).json({ error: 'No account found with this email.' });
+    }
+
+    if (!user.pinEnabled || !user.pinHash) {
+      return res.status(200).json({ success: true, valid: true });
+    }
+
+    const isMatch = await bcrypt.compare(pin, user.pinHash);
+    if (!isMatch) {
+      return res.status(200).json({ success: false, valid: false });
+    }
+
+    res.status(200).json({ success: true, valid: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 8. REMOVE 2FA PIN
+router.post('/remove-pin', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required.' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      return res.status(444).json({ error: 'No account found with this email.' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(400).json({ error: 'Incorrect password.' });
+    }
+
+    user.pinHash = null;
+    user.pinEnabled = false;
+    await user.save();
+
+    res.status(200).json({ success: true, message: '2FA PIN removed successfully.', pinEnabled: false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 9. FETCH 2FA PIN STATUS
+router.get('/pin-status', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required.' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      return res.status(444).json({ error: 'No account found with this email.' });
+    }
+
+    res.status(200).json({ success: true, pinEnabled: !!user.pinEnabled });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

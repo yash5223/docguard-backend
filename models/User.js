@@ -13,6 +13,9 @@ const userSchema = new mongoose.Schema({
   // Added custom unique sequential ID field
   customer_id: { type: String, unique: true },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  // 2FA PIN lock fields
+  pinHash: { type: String, default: null },
+  pinEnabled: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 });
 

@@ -2,28 +2,53 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const path = require('path'); // ADD THIS LINE
+const path = require('path');
 const userRoutes = require('./routes/userRoutes');
 const scanReceiptRoutes = require('./routes/scanReceipt');
 const assetRoutes = require('./routes/assetRoutes');
 const vaultRoutes = require('./routes/vaultRoutes');
+const aiRoutes = require('./routes/aiRoutes');
 const Invite = require('./models/Invite');
+
 const app = express();
+
+// 1. Standard Middleware
 app.use(cors());
 app.use(express.json());
+
+// 2. Logging Middleware (Placed here so it logs EVERYTHING below)
+app.use((req, res, next) => {
+  console.log(`[${req.method}] ${req.url}`);
+  if (req.method === 'POST' || req.method === 'PUT') {
+    req.on('data', (chunk) => {
+      console.log('Body:', chunk.toString());
+    });
+  }
+  next();
+});
+
+// 3. API Route Mounts (Defined AFTER logging middleware)
+app.use('/api/users', userRoutes);
+app.use('/api/receipt', scanReceiptRoutes);
+app.use('/api/assets', assetRoutes);
+app.use('/api/vault', vaultRoutes);
+app.use('/api/ai', aiRoutes); // This is the ONLY mount for AI routes
+
+// 4. Static Files and Misc
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
+
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('Connected to MongoDB Atlas'))
   .catch((err) => console.error('Connection error:', err));
+
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
 
-// Landing page for shared invite links, e.g. https://<your-host>/join/<token>
-// Opened in a plain browser (that's what happens when someone taps a shared link),
-// so this has to be an HTML page, not a JSON API response.
+// 5. Shared Invite Link Route
 app.get('/join/:token', async (req, res) => {
   const { token } = req.params;
   let statusMessage = 'This invite link is invalid.';
@@ -45,9 +70,6 @@ app.get('/join/:token', async (req, res) => {
     statusMessage = 'Something went wrong checking this invite.';
   }
 
-  // Attempts to hand off to the app via a custom URL scheme first.
-  // Update DEEP_LINK_SCHEME once the Flutter app registers its own scheme
-  // (e.g. docguard://join/<token>) in AndroidManifest.xml / Info.plist.
   const deepLink = `docguard://join/${token}`;
 
   res.send(`<!DOCTYPE html>
@@ -89,16 +111,12 @@ app.get('/join/:token', async (req, res) => {
       navigator.clipboard.writeText(${JSON.stringify(token)});
       alert('Invite code copied');
     }
-    // Best-effort auto-attempt to open the app once, on load.
     ${statusOk ? `window.location.href = ${JSON.stringify(deepLink)};` : ''}
   </script>
 </body>
 </html>`);
 });
-app.use('/api/users', userRoutes);
-app.use('/api/receipt', scanReceiptRoutes);
-app.use('/api/assets', assetRoutes);
-app.use('/api/vault', vaultRoutes);
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
