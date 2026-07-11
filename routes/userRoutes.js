@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
+const { sendOtpEmail } = require('../utils/mailer');
 
 const router = express.Router();
 
@@ -93,6 +94,9 @@ router.post('/login', async (req, res) => {
 router.post('/forgot-password/request', async (req, res) => {
   try {
     const { contactInfo } = req.body;
+    if (!contactInfo || !contactInfo.trim()) {
+      return res.status(400).json({ error: 'Email or phone number is required.' });
+    }
     const cleanContact = contactInfo.toLowerCase().trim();
 
     const user = await User.findOne({
@@ -103,11 +107,26 @@ router.post('/forgot-password/request', async (req, res) => {
       return res.status(444).json({ error: 'No account associated with that contact.' });
     }
 
-    const otpCode = "123456"; 
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); 
+    if (!cleanContact.includes('@')) {
+      return res.status(400).json({ error: 'Password reset via phone number is not supported yet. Please use your registered email address instead.' });
+    }
 
+    const otpCode = String(Math.floor(100000 + Math.random() * 900000)); // random 6-digit code
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    // Remove any older, still-pending codes for this contact before issuing a new one
+    await Otp.deleteMany({ contactInfo: cleanContact });
     await Otp.create({ contactInfo: cleanContact, otpCode, expiresAt });
-    res.status(200).json({ success: true, message: 'Verification code generated' });
+
+    try {
+      await sendOtpEmail(cleanContact, otpCode);
+    } catch (mailErr) {
+      console.error('[OTP] Failed to send email:', mailErr.message);
+      await Otp.deleteMany({ contactInfo: cleanContact });
+      return res.status(500).json({ error: 'Could not send verification email. Please try again in a moment.' });
+    }
+
+    res.status(200).json({ success: true, message: 'Verification code sent to your email' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -125,6 +144,10 @@ router.post('/forgot-password/verify', async (req, res) => {
     if (!match) {
       return res.status(400).json({ error: 'Invalid verification code.' });
     }
+    if (match.expiresAt < new Date()) {
+      await Otp.deleteOne({ _id: match._id });
+      return res.status(400).json({ error: 'This code has expired. Please request a new one.' });
+    }
     res.status(200).json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -134,14 +157,28 @@ router.post('/forgot-password/verify', async (req, res) => {
 // 5. FORGOT PASSWORD - RESET PASS
 router.post('/forgot-password/reset', async (req, res) => {
   try {
-    const { contactInfo, newPassword } = req.body;
+    const { contactInfo, otpCode, newPassword } = req.body;
+    if (!contactInfo || !otpCode || !newPassword) {
+      return res.status(400).json({ error: 'Contact info, verification code and new password are required.' });
+    }
     const cleanContact = contactInfo.toLowerCase().trim();
+
+    const match = await Otp.findOne({ contactInfo: cleanContact, otpCode });
+    if (!match) {
+      return res.status(400).json({ error: 'Invalid or already-used verification code.' });
+    }
+    if (match.expiresAt < new Date()) {
+      await Otp.deleteOne({ _id: match._id });
+      return res.status(400).json({ error: 'This code has expired. Please request a new one.' });
+    }
+
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
     await User.updateMany(
       { $or: [{ email: cleanContact }, { phone: cleanContact }] },
       { $set: { passwordHash: hashedNewPassword } }
     );
+    await Otp.deleteMany({ contactInfo: cleanContact });
 
     res.status(200).json({ success: true, message: 'Password updated successfully' });
   } catch (err) {

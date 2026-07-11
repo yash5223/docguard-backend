@@ -6,4 +6,7 @@ const otpSchema = new mongoose.Schema({
   expiresAt: { type: Date, required: true }
 });
 
+// TTL index: MongoDB automatically deletes the document once expiresAt is reached.
+otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
 module.exports = mongoose.model('Otp', otpSchema, 'password_resets');
