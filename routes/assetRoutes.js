@@ -1,16 +1,11 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const router = express.Router();
 const User = require('../models/User');
 const Asset = require('../models/Asset');
-const uploadDir = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-const upload = multer({ dest: uploadDir });
+const { uploadBufferToCloudinary, deleteFromCloudinaryByUrl } = require('../utils/cloudinary');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 router.post('/save-asset', upload.single('image'), async (expressRequest, expressResponse) => {
   try {
     const { email, password } = expressRequest.body;
@@ -19,28 +14,22 @@ router.post('/save-asset', upload.single('image'), async (expressRequest, expres
     }
     const assetData = JSON.parse(expressRequest.body.assetData);
     if (!email || !password) {
-      if (expressRequest.file) fs.unlinkSync(expressRequest.file.path);
       return expressResponse.status(401).json({ error: 'Authentication credentials required.' });
     }
     const userMatch = await User.findOne({ email: email.toLowerCase().trim() });
     if (!userMatch) {
-      if (expressRequest.file) fs.unlinkSync(expressRequest.file.path);
       return expressResponse.status(401).json({ error: 'Invalid user account credentials.' });
     }
     const isPasswordValid = await bcrypt.compare(password, userMatch.passwordHash);
     if (!isPasswordValid) {
-      if (expressRequest.file) fs.unlinkSync(expressRequest.file.path);
       return expressResponse.status(401).json({ error: 'Invalid user account credentials.' });
     }
     const assetDocuments = [];
     if (expressRequest.file) {
-      const tempPath = expressRequest.file.path;
       const sanitizedAssetName = assetData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-      const fileExtension = path.extname(expressRequest.file.originalname) || '.png';
-      const newFileName = `${userMatch.customer_id}_${sanitizedAssetName}_01${fileExtension}`;
-      const targetPath = path.join(uploadDir, newFileName);
-      fs.renameSync(tempPath, targetPath);
-      assetDocuments.push(newFileName);
+      const publicId = `${userMatch.customer_id}_${sanitizedAssetName}_01_${Date.now()}`;
+      const secureUrl = await uploadBufferToCloudinary(expressRequest.file.buffer, publicId);
+      assetDocuments.push(secureUrl);
     }
     const newAsset = new Asset({
       userId: userMatch.customer_id,
@@ -61,9 +50,6 @@ router.post('/save-asset', upload.single('image'), async (expressRequest, expres
     await newAsset.save();
     return expressResponse.status(201).json({ success: true, message: 'Asset successfully saved to vault.' });
   } catch (serverError) {
-    if (expressRequest.file && fs.existsSync(expressRequest.file.path)) {
-      fs.unlinkSync(expressRequest.file.path);
-    }
     return expressResponse.status(500).json({ error: serverError.message });
   }
 });
@@ -71,28 +57,23 @@ router.post('/append-document', upload.single('image'), async (req, res) => {
   try {
     const { assetId, email } = req.body;
     if (!req.file || !assetId || !email) {
-      if (req.file) fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Missing parameters or file data.' });
     }
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     const asset = await Asset.findById(assetId);
     if (!user || !asset) {
-      if (req.file) fs.unlinkSync(req.file.path);
       return res.status(404).json({ error: 'Asset parameters not found.' });
     }
     const currentCount = asset.documents ? asset.documents.length : 0;
     const nextIndex = String(currentCount + 1).padStart(2, '0');
     const sanitizedName = asset.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-    const extension = path.extname(req.file.originalname) || '.png';
-    const newFileName = `${user.customer_id}_${sanitizedName}_${nextIndex}${extension}`;
-    const targetPath = path.join(uploadDir, newFileName);
-    fs.renameSync(req.file.path, targetPath);
+    const publicId = `${user.customer_id}_${sanitizedName}_${nextIndex}_${Date.now()}`;
+    const secureUrl = await uploadBufferToCloudinary(req.file.buffer, publicId);
     asset.documents = asset.documents || [];
-    asset.documents.push(newFileName);
+    asset.documents.push(secureUrl);
     await asset.save();
     return res.status(200).json({ success: true, documents: asset.documents });
   } catch (err) {
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -108,10 +89,7 @@ router.delete('/delete-document', async (req, res) => {
     }
     asset.documents = asset.documents.filter(doc => doc !== filename);
     await asset.save();
-    const filePath = path.join(uploadDir, filename);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    await deleteFromCloudinaryByUrl(filename);
     return res.status(200).json({ success: true, documents: asset.documents });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -191,16 +169,7 @@ router.delete('/delete-asset/:id', async (req, res) => {
       return res.status(404).json({ error: 'Asset record not found.' });
     }
     const filesToDelete = asset.documents || [];
-    filesToDelete.forEach(filename => {
-      const filePath = path.join(uploadDir, filename);
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (err) {
-          console.error(`Failed to delete file ${filename}:`, err.message);
-        }
-      }
-    });
+    await Promise.all(filesToDelete.map(filename => deleteFromCloudinaryByUrl(filename)));
     await Asset.findByIdAndDelete(assetId);
     return res.status(200).json({ success: true, message: 'Asset and all associated files deleted successfully.' });
   } catch (err) {

@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const path = require('path');
 const userRoutes = require('./routes/userRoutes');
 const scanReceiptRoutes = require('./routes/scanReceipt');
 const assetRoutes = require('./routes/assetRoutes');
@@ -28,9 +27,6 @@ app.use('/api/receipt', scanReceiptRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/ai', aiRoutes); // This is the ONLY mount for AI routes
-
-// 4. Static Files and Misc
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
