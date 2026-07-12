@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-
 const userSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
   dob: { type: Date, required: true },
@@ -8,15 +7,11 @@ const userSchema = new mongoose.Schema({
   phone: { type: String, required: true, unique: true, trim: true },
   aadhaar: { type: String, required: true, unique: true, trim: true },
   passwordHash: { type: String, required: true }, 
-  // Keeps existing subscription_plan field as it is
   subscription_plan: { type: String, default: ""  },
-  // Added custom unique sequential ID field
   customer_id: { type: String, unique: true },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
-  // 2FA PIN lock fields
   pinHash: { type: String, default: null },
   pinEnabled: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 });
-
 module.exports = mongoose.model('User', userSchema, 'users');

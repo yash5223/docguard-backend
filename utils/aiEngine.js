@@ -1,9 +1,3 @@
-// aiEngine.js
-// Fully self-contained, rule-based "AI" for DocGuard.
-// No external AI/LLM APIs are used anywhere in this file — everything here is
-// plain JavaScript: keyword/intent matching, regex entity extraction, and
-// template-based natural language generation driven by real asset data.
-
 function formatINR(value) {
   const num = Math.round(Number(value) || 0);
   const str = Math.abs(num).toString();
@@ -17,20 +11,16 @@ function formatINR(value) {
   }
   return (num < 0 ? '-' : '') + '\u20B9' + formatted;
 }
-
 function daysBetween(a, b) {
   const MS = 1000 * 60 * 60 * 24;
   return Math.round((b.getTime() - a.getTime()) / MS);
 }
-
 function formatDate(d) {
   if (!d) return null;
   const date = new Date(d);
   if (isNaN(date.getTime())) return null;
   return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
-
-// Parses free-text amounts like "50000", "50k", "1.5 lakh", "2 lac", "1 cr", "₹75,000"
 function parseAmount(text) {
   const cleaned = text.toLowerCase().replace(/[₹,]/g, '');
   const match = cleaned.match(/(\d+(?:\.\d+)?)\s*(k|thousand|l|lakh|lac|cr|crore)?/);
@@ -42,9 +32,6 @@ function parseAmount(text) {
   else if (unit === 'cr' || unit === 'crore') value *= 10000000;
   return value;
 }
-
-// Extracts a "within N days" style window from phrases like "soon", "in 30 days",
-// "next 2 months", "this week". Defaults to 30 days for generic "soon" queries.
 function extractWindowDays(message) {
   const m = message.match(/(\d+)\s*(day|week|month|year)s?/);
   if (m) {
@@ -59,9 +46,6 @@ function extractWindowDays(message) {
   if (/this month/.test(message)) return 30;
   return 30;
 }
-
-// Scores how well an asset matches a free-text query, based on name / brand /
-// category / subCategory / seller / notes word overlap. Returns best matches first.
 function findMatchingAssets(query, assets, limit = 5) {
   const qWords = query.toLowerCase().match(/[a-z0-9]+/g) || [];
   if (qWords.length === 0) return [];
@@ -72,7 +56,7 @@ function findMatchingAssets(query, assets, limit = 5) {
     ].filter(Boolean).join(' ').toLowerCase();
     let score = 0;
     qWords.forEach(w => {
-      if (w.length < 3) return; // skip tiny filler words
+      if (w.length < 3) return; 
       if (haystack.includes(w)) score += w.length >= 4 ? 2 : 1;
     });
     return { asset, score };
@@ -83,76 +67,49 @@ function findMatchingAssets(query, assets, limit = 5) {
     .slice(0, limit)
     .map(s => s.asset);
 }
-
 const STOPWORDS = new Set(['show', 'me', 'my', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'did', 'do', 'does', 'i', 'when', 'what', 'which', 'how', 'much', 'many', 'purchases', 'purchase', 'buy', 'bought', 'assets', 'asset', 'for', 'of', 'in', 'on', 'to', 'and']);
-
 function extractSearchPhrase(message) {
   const words = (message.toLowerCase().match(/[a-z0-9]+/g) || []).filter(w => !STOPWORDS.has(w));
   return words.join(' ');
 }
-
-// ---------------------------------------------------------------------------
-// Intent detection — ordered keyword rules. First match wins.
-// ---------------------------------------------------------------------------
 function detectIntent(message) {
   const m = message.toLowerCase().trim();
-
   if (/^(hi|hello|hey|yo|good (morning|afternoon|evening))\b/.test(m)) return 'greeting';
   if (/what can you do|help me|how (do|can) i use you|capabilities/.test(m)) return 'help';
-
   if (/warrant(y|ies)/.test(m)) {
     if (/expired|already ended|no longer valid/.test(m)) return 'warranty_expired';
     return 'warranty_expiring';
   }
-
   if (/(above|over|more than|greater than|>)\s*₹?\d/.test(m) || /costl(y|ier)/.test(m)) return 'price_above';
   if (/(below|under|less than|<)\s*₹?\d/.test(m)) return 'price_below';
   if (/between\s*₹?\d.*and\s*₹?\d/.test(m)) return 'price_between';
-
   if (/when did i (buy|get|purchase|register)|purchase date|when was .* (bought|purchased|registered)/.test(m)) return 'purchase_date';
-
   if (/total (asset )?value|net worth|how much (is|are) (my|all)|overall value|portfolio value|worth (of|are)/.test(m)) return 'total_value';
   if (/how many assets|total assets|count of assets|number of assets/.test(m)) return 'count_assets';
-
   if (/most expensive|priciest|highest value/.test(m)) return 'most_expensive';
   if (/(cheapest|least expensive|lowest value)/.test(m)) return 'least_expensive';
-
   if (/oldest|first (asset|thing) i added|earliest purchase/.test(m)) return 'oldest_asset';
   if (/newest|latest|most recent(ly)?|last added/.test(m)) return 'newest_asset';
-
   if (/service (record|history)|maintenance (record|history)|serviced/.test(m)) return 'service_history';
-
   if (/(list|show|display).*(all|every)?.*assets?|what (assets|things) do i have|inventory/.test(m)) return 'list_all';
-
   if (/breakdown|by category|categories/.test(m)) return 'category_breakdown';
-
   if (/document(s)? (for|of|attached)/.test(m)) return 'documents_for_asset';
-
   return 'asset_lookup';
 }
-
 function listAssetLines(assets, formatter) {
   return assets.map(formatter).join('\n');
 }
-
-// ---------------------------------------------------------------------------
-// Main reply generator
-// ---------------------------------------------------------------------------
 function generateReply(message, assets) {
   const intent = detectIntent(message);
   const now = new Date();
-
   if (assets.length === 0 && !['greeting', 'help'].includes(intent)) {
     return "You don't have any assets saved in your vault yet. Once you scan or add a receipt, I can answer questions about it.";
   }
-
   switch (intent) {
     case 'greeting':
       return "Hi! I'm DocGuard AI. Ask me things like \"which warranties expire soon\", \"show purchases above ₹50,000\", or \"when did I buy my MacBook?\"";
-
     case 'help':
       return "I can help you with:\n• Warranty expiry (\"which warranties expire soon\")\n• Value filters (\"purchases above ₹50,000\")\n• Purchase dates (\"when did I buy my iPhone\")\n• Totals (\"what's my total asset value\")\n• Service history (\"service records for my car\")\n• Finding a specific item (\"tell me about my MacBook\")";
-
     case 'warranty_expiring': {
       const windowDays = extractWindowDays(message);
       const upcoming = assets
@@ -166,7 +123,6 @@ function generateReply(message, assets) {
       const lines = upcoming.map(x => `• ${x.a.name} — expires ${formatDate(x.a.warrantyExpiry)} (in ${x.days} day${x.days === 1 ? '' : 's'})`).join('\n');
       return `${upcoming.length} warrant${upcoming.length === 1 ? 'y is' : 'ies are'} expiring within ${windowDays} days:\n${lines}`;
     }
-
     case 'warranty_expired': {
       const expired = assets
         .filter(a => a.warrantyExpiry && new Date(a.warrantyExpiry) < now)
@@ -175,7 +131,6 @@ function generateReply(message, assets) {
       const lines = expired.map(a => `• ${a.name} — expired ${formatDate(a.warrantyExpiry)}`).join('\n');
       return `${expired.length} warrant${expired.length === 1 ? 'y has' : 'ies have'} expired:\n${lines}`;
     }
-
     case 'price_above': {
       const amount = parseAmount(message);
       if (amount == null) return "Tell me an amount, e.g. \"show purchases above ₹50,000\".";
@@ -183,7 +138,6 @@ function generateReply(message, assets) {
       if (matches.length === 0) return `No assets found above ${formatINR(amount)}.`;
       return `${matches.length} asset${matches.length === 1 ? '' : 's'} above ${formatINR(amount)}:\n` + listAssetLines(matches, a => `• ${a.name} — ${formatINR(a.valueAmount || 0)}`);
     }
-
     case 'price_below': {
       const amount = parseAmount(message);
       if (amount == null) return "Tell me an amount, e.g. \"show purchases under ₹10,000\".";
@@ -191,7 +145,6 @@ function generateReply(message, assets) {
       if (matches.length === 0) return `No assets found under ${formatINR(amount)}.`;
       return `${matches.length} asset${matches.length === 1 ? '' : 's'} under ${formatINR(amount)}:\n` + listAssetLines(matches, a => `• ${a.name} — ${formatINR(a.valueAmount || 0)}`);
     }
-
     case 'price_between': {
       const nums = (message.match(/₹?\s?\d[\d,]*(\.\d+)?\s?(k|l|lakh|lac|cr|crore)?/gi) || []).map(s => parseAmount(s));
       if (nums.length < 2) return "Give me a range, e.g. \"between ₹10,000 and ₹50,000\".";
@@ -200,7 +153,6 @@ function generateReply(message, assets) {
       if (matches.length === 0) return `No assets found between ${formatINR(lo)} and ${formatINR(hi)}.`;
       return `${matches.length} asset${matches.length === 1 ? '' : 's'} between ${formatINR(lo)} and ${formatINR(hi)}:\n` + listAssetLines(matches, a => `• ${a.name} — ${formatINR(a.valueAmount || 0)}`);
     }
-
     case 'purchase_date': {
       const phrase = extractSearchPhrase(message);
       const matches = findMatchingAssets(phrase, assets, 3);
@@ -211,43 +163,36 @@ function generateReply(message, assets) {
       }
       return `Found a few matches:\n` + listAssetLines(matches, a => `• ${a.name} — ${a.purchaseOrRegDate ? formatDate(a.purchaseOrRegDate) : 'no date on file'}`);
     }
-
     case 'total_value': {
       const total = assets.reduce((sum, a) => sum + (a.valueAmount || 0), 0);
       return `Your ${assets.length} asset${assets.length === 1 ? '' : 's'} are together worth ${formatINR(total)}.`;
     }
-
     case 'count_assets': {
       const byCategory = {};
       assets.forEach(a => { byCategory[a.category] = (byCategory[a.category] || 0) + 1; });
       const breakdown = Object.entries(byCategory).map(([cat, n]) => `${cat}: ${n}`).join(', ');
       return `You have ${assets.length} asset${assets.length === 1 ? '' : 's'} total (${breakdown}).`;
     }
-
     case 'most_expensive': {
       const top = [...assets].sort((a, b) => (b.valueAmount || 0) - (a.valueAmount || 0))[0];
       return `Your most valuable asset is ${top.name} at ${formatINR(top.valueAmount || 0)}.`;
     }
-
     case 'least_expensive': {
       const withValue = assets.filter(a => (a.valueAmount || 0) > 0);
       if (withValue.length === 0) return "None of your assets have a recorded value.";
       const bottom = [...withValue].sort((a, b) => (a.valueAmount || 0) - (b.valueAmount || 0))[0];
       return `Your least expensive recorded asset is ${bottom.name} at ${formatINR(bottom.valueAmount || 0)}.`;
     }
-
     case 'oldest_asset': {
       const withDate = assets.filter(a => a.purchaseOrRegDate);
       if (withDate.length === 0) return "None of your assets have a purchase date recorded.";
       const oldest = [...withDate].sort((a, b) => new Date(a.purchaseOrRegDate) - new Date(b.purchaseOrRegDate))[0];
       return `Your oldest recorded asset is ${oldest.name}, purchased on ${formatDate(oldest.purchaseOrRegDate)}.`;
     }
-
     case 'newest_asset': {
       const newest = [...assets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
       return `Your most recently added asset is ${newest.name}${newest.purchaseOrRegDate ? `, purchased on ${formatDate(newest.purchaseOrRegDate)}` : ''}.`;
     }
-
     case 'service_history': {
       const phrase = extractSearchPhrase(message);
       const matches = findMatchingAssets(phrase, assets, 3);
@@ -259,12 +204,10 @@ function generateReply(message, assets) {
         return `${a.name}:\n${lines}`;
       }).join('\n\n');
     }
-
     case 'list_all': {
       const sorted = [...assets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       return `You have ${sorted.length} asset${sorted.length === 1 ? '' : 's'}:\n` + listAssetLines(sorted, a => `• ${a.name} (${a.category}) — ${formatINR(a.valueAmount || 0)}`);
     }
-
     case 'category_breakdown': {
       const byCategory = {};
       assets.forEach(a => {
@@ -274,7 +217,6 @@ function generateReply(message, assets) {
       });
       return Object.entries(byCategory).map(([cat, d]) => `• ${cat}: ${d.count} item${d.count === 1 ? '' : 's'}, ${formatINR(d.value)}`).join('\n');
     }
-
     case 'documents_for_asset': {
       const phrase = extractSearchPhrase(message);
       const matches = findMatchingAssets(phrase, assets, 1);
@@ -283,7 +225,6 @@ function generateReply(message, assets) {
       const count = (a.documents || []).length;
       return count === 0 ? `No documents are attached to ${a.name}.` : `${a.name} has ${count} document${count === 1 ? '' : 's'} attached.`;
     }
-
     case 'asset_lookup':
     default: {
       const phrase = extractSearchPhrase(message);
@@ -298,18 +239,12 @@ function generateReply(message, assets) {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Data-driven AI Summary generator for a single asset (used by the asset
-// details "AI Summary" card). Purely template + real data, no external calls.
-// ---------------------------------------------------------------------------
 function generateAssetSummary(asset) {
   const sentences = [];
   const name = asset.name || 'This asset';
   const brand = asset.brandOrDeveloper && asset.brandOrDeveloper !== '-' ? asset.brandOrDeveloper : null;
   const seller = asset.storeOrSeller && asset.storeOrSeller !== '-' ? asset.storeOrSeller : null;
   const category = asset.category || null;
-
   let overview = `${name}`;
   if (brand) overview += ` from ${brand}`;
   if (category) overview += ` is registered under your ${category}${asset.subCategory ? ` / ${asset.subCategory}` : ''} vault`;
@@ -318,11 +253,9 @@ function generateAssetSummary(asset) {
   else if (seller) overview += `, purchased from ${seller}`;
   overview += '.';
   sentences.push(overview);
-
   if (asset.valueAmount) {
     sentences.push(`It was valued at ${formatINR(asset.valueAmount)}${asset.invoiceOrDeedNumber && asset.invoiceOrDeedNumber !== '-' ? `, recorded under invoice/deed number ${asset.invoiceOrDeedNumber}` : ''}.`);
   }
-
   if (asset.warrantyExpiry) {
     const days = daysBetween(new Date(), new Date(asset.warrantyExpiry));
     if (days >= 0) {
@@ -331,22 +264,18 @@ function generateAssetSummary(asset) {
       sentences.push(`Its warranty expired on ${formatDate(asset.warrantyExpiry)}, ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago.`);
     }
   }
-
   const records = asset.serviceRecords || [];
   if (records.length > 0) {
     const latest = [...records].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
     const totalCost = records.reduce((s, r) => s + (r.cost || 0), 0);
     sentences.push(`It has ${records.length} service record${records.length === 1 ? '' : 's'} on file totaling ${formatINR(totalCost)}, most recently "${latest.title}" on ${formatDate(latest.date)}.`);
   }
-
   const docCount = (asset.documents || []).length;
   if (docCount > 0) {
     sentences.push(`${docCount} supporting document${docCount === 1 ? ' is' : 's are'} securely stored with this record.`);
   }
-
   return sentences.join(' ');
 }
-
 module.exports = {
   formatINR,
   parseAmount,

@@ -5,13 +5,7 @@ const router = express.Router();
 const User = require('../models/User');
 const Invite = require('../models/Invite');
 const VaultMember = require('../models/VaultMember');
-
 const INVITE_EXPIRY_DAYS = 7;
-
-// Public app base used to build the shareable join link.
-// Set JOIN_LINK_BASE in .env once you have a real domain (e.g. https://docguard.app/join).
-// Until then, we build the link from whatever host actually served the request,
-// so it always points somewhere real instead of a placeholder domain.
 function buildInviteLink(token, req) {
   const configuredBase = process.env.JOIN_LINK_BASE;
   if (configuredBase) {
@@ -21,8 +15,6 @@ function buildInviteLink(token, req) {
   const host = req.get('host');
   return `${protocol}://${host}/join/${token}`;
 }
-
-// Serializes an Invite document into what the app's UI expects.
 function serializeInvite(invite, req) {
   return {
     id: invite._id,
@@ -34,8 +26,6 @@ function serializeInvite(invite, req) {
     expiresAt: invite.expiresAt
   };
 }
-
-// 1. CREATE AN INVITE
 router.post('/create-invite', async (req, res) => {
   try {
     const { email, password, role } = req.body;
@@ -66,8 +56,6 @@ router.post('/create-invite', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-
-// 2. LIST PENDING INVITES FOR A VAULT OWNER
 router.get('/invites', async (req, res) => {
   try {
     const { email } = req.query;
@@ -78,7 +66,6 @@ router.get('/invites', async (req, res) => {
     if (!owner) {
       return res.status(404).json({ error: 'User account profile not found.' });
     }
-    // Auto-expire anything past its date so the list stays accurate.
     await Invite.updateMany(
       { ownerCustomerId: owner.customer_id, status: 'pending', expiresAt: { $lt: new Date() } },
       { $set: { status: 'revoked' } }
@@ -92,8 +79,6 @@ router.get('/invites', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-
-// 3. REVOKE / CANCEL A PENDING INVITE
 router.delete('/invites/:token', async (req, res) => {
   try {
     const { email } = req.query;
@@ -115,8 +100,6 @@ router.delete('/invites/:token', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-
-// 4. ACCEPT AN INVITE (join someone else's vault)
 router.post('/join', async (req, res) => {
   try {
     const { token, email, password } = req.body;
@@ -173,7 +156,6 @@ router.post('/join', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-
 // 5. LIST MEMBERS OF A VAULT
 router.get('/members', async (req, res) => {
   try {
@@ -200,8 +182,6 @@ router.get('/members', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-
-// 6. REMOVE A MEMBER FROM A VAULT
 router.delete('/members/:id', async (req, res) => {
   try {
     const { email } = req.query;
@@ -223,9 +203,6 @@ router.delete('/members/:id', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
-
-// Resolves what vault a given email should act against, and with what role.
-// Exported so other route files (e.g. assetRoutes) can enforce vault access.
 async function resolveVaultAccess(email, vaultOwnerCustomerId) {
   const requester = await User.findOne({ email: email.toLowerCase().trim() });
   if (!requester) return null;
@@ -239,6 +216,5 @@ async function resolveVaultAccess(email, vaultOwnerCustomerId) {
   if (!membership) return null;
   return { ownerCustomerId: vaultOwnerCustomerId, role: membership.role, requester };
 }
-
 module.exports = router;
 module.exports.resolveVaultAccess = resolveVaultAccess;

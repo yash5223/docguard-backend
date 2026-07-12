@@ -8,43 +8,33 @@ const assetRoutes = require('./routes/assetRoutes');
 const vaultRoutes = require('./routes/vaultRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const Invite = require('./models/Invite');
-
 const app = express();
-
-// 1. Standard Middleware
 app.use(cors());
 app.use(express.json());
-
-// 2. Logging Middleware (Placed here so it logs EVERYTHING below)
 app.use((req, res, next) => {
   console.log(`[${req.method}] ${req.url}`);
   next();
 });
-
-// 3. API Route Mounts (Defined AFTER logging middleware)
 app.use('/api/users', userRoutes);
 app.use('/api/receipt', scanReceiptRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/vault', vaultRoutes);
-app.use('/api/ai', aiRoutes); // This is the ONLY mount for AI routes
-
+app.use('/api/ai', aiRoutes); 
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
-
-mongoose.connect(MONGODB_URI)
+mongoose.set('bufferTimeoutMS', 8000);
+mongoose.connect(MONGODB_URI, {
+  serverSelectionTimeoutMS: 8000, 
+})
   .then(() => console.log('Connected to MongoDB Atlas'))
   .catch((err) => console.error('Connection error:', err));
-
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
-
-// 5. Shared Invite Link Route
 app.get('/join/:token', async (req, res) => {
   const { token } = req.params;
   let statusMessage = 'This invite link is invalid.';
   let statusOk = false;
-
   try {
     const invite = await Invite.findOne({ token });
     if (invite) {
@@ -60,9 +50,7 @@ app.get('/join/:token', async (req, res) => {
   } catch (err) {
     statusMessage = 'Something went wrong checking this invite.';
   }
-
   const deepLink = `docguard://join/${token}`;
-
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -107,7 +95,16 @@ app.get('/join/:token', async (req, res) => {
 </body>
 </html>`);
 });
-
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
+const selfUrl = process.env.RENDER_EXTERNAL_URL;
+if (selfUrl) {
+  const PING_INTERVAL_MS = 10 * 60 * 1000;
+  setInterval(() => {
+    fetch(selfUrl)
+      .then(() => console.log('[keep-alive] self-ping OK'))
+      .catch((err) => console.error('[keep-alive] self-ping failed:', err.message));
+  }, PING_INTERVAL_MS);
+  console.log(`[keep-alive] self-ping enabled, pinging ${selfUrl} every ${PING_INTERVAL_MS / 60000} min`);
+}

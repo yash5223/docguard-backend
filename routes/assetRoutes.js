@@ -6,7 +6,7 @@ const User = require('../models/User');
 const Asset = require('../models/Asset');
 const { uploadBufferToCloudinary, deleteFromCloudinaryByUrl } = require('../utils/cloudinary');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-router.post('/save-asset', upload.single('image'), async (expressRequest, expressResponse) => {
+router.post('/save-asset', upload.array('images', 10), async (expressRequest, expressResponse) => {
   try {
     const { email, password } = expressRequest.body;
     if (!expressRequest.body.assetData) {
@@ -25,12 +25,21 @@ router.post('/save-asset', upload.single('image'), async (expressRequest, expres
       return expressResponse.status(401).json({ error: 'Invalid user account credentials.' });
     }
     const assetDocuments = [];
-    if (expressRequest.file) {
+    const uploadedFiles = expressRequest.files || [];
+    if (uploadedFiles.length > 0) {
       const sanitizedAssetName = assetData.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-      const publicId = `${userMatch.customer_id}_${sanitizedAssetName}_01_${Date.now()}`;
-      const secureUrl = await uploadBufferToCloudinary(expressRequest.file.buffer, publicId);
-      assetDocuments.push(secureUrl);
+      const timestamp = Date.now();
+      for (let i = 0; i < uploadedFiles.length; i++) {
+        const fileIndex = String(i + 1).padStart(2, '0');
+        const publicId = `${userMatch.customer_id}_${sanitizedAssetName}_${fileIndex}_${timestamp}`;
+        const secureUrl = await uploadBufferToCloudinary(uploadedFiles[i].buffer, publicId);
+        assetDocuments.push(secureUrl);
+      }
     }
+    // Category-specific spec fields sent by the client with proper, descriptive
+    // names (e.g. modelNumber, serialNumber) instead of generic specField1/specField2.
+    // Only the pair relevant to assetData.category will actually be populated,
+    // but we accept any of them defensively.
     const newAsset = new Asset({
       userId: userMatch.customer_id,
       name: assetData.name,
@@ -43,8 +52,24 @@ router.post('/save-asset', upload.single('image'), async (expressRequest, expres
       invoiceOrDeedNumber: assetData.invoiceOrDeedNumber,
       warrantyExpiry: assetData.warrantyExpiry ? new Date(assetData.warrantyExpiry) : null,
       notesOrAddress: assetData.notesOrAddress,
-      specField1: assetData.specField1,
-      specField2: assetData.specField2,
+      // Property
+      builtUpArea: assetData.builtUpArea || '',
+      reraKhataNumber: assetData.reraKhataNumber || '',
+      // Vehicles
+      registrationNumber: assetData.registrationNumber || '',
+      mileage: assetData.mileage || '',
+      // Gadgets / Electronics
+      modelNumber: assetData.modelNumber || '',
+      serialNumber: assetData.serialNumber || '',
+      // Jewelry
+      caratPurity: assetData.caratPurity || '',
+      weightMaterial: assetData.weightMaterial || '',
+      // Furniture
+      dimensions: assetData.dimensions || '',
+      materialType: assetData.materialType || '',
+      // Other
+      customAttribute1: assetData.customAttribute1 || '',
+      customAttribute2: assetData.customAttribute2 || '',
       documents: assetDocuments
     });
     await newAsset.save();

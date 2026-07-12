@@ -2,27 +2,19 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const Tesseract = require('tesseract.js');
-const sharp = require('sharp');
-
 const router = express.Router();
 const uploadDir = path.join(__dirname, '..', 'uploads');
-
 if (!fs.existsSync(uploadDir)) { 
   fs.mkdirSync(uploadDir, { recursive: true }); 
 }
-
 const upload = multer({ dest: uploadDir });
-
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434/api/generate';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
-
 function extract(regex, text) {
   const match = text.match(regex);
   if (!match) return "";
   return (match[1] || match[0]).trim();
 }
-
 function parseInvoice(text) {
   // Updated standard default parser context to default to Property
   let detectedCategory = "Property";
@@ -39,9 +31,7 @@ function parseInvoice(text) {
   } else if (/\b(other|misc|miscellaneous)\b/i.test(text)) {
     detectedCategory = "Other";
   }
-
   const nameMatch = extract(/(?:Description|Product|Item|Asset|Property Name)\s*[: ]\s*([A-Za-z0-9 ]+)/i, text);
-
   return {
     category: detectedCategory,
     name: nameMatch || extract(/^([A-Za-z0-9 ]{3,24})/m, text),
@@ -57,20 +47,18 @@ function parseInvoice(text) {
     specField2: extract(/(?:RERA|Khata|VIN|Mileage|Serial Number|S\/N|Weight|Material)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text)
   };
 }
-
 router.post('/scan-receipt', upload.single('image'), async (req, res) => {
+  const sharp = require('sharp');
+  const Tesseract = require('tesseract.js');
   let processedImagePath = null;
-
   try {
     if (!req.file) { return res.status(400).json({ error: 'No image uploaded' }); }
-
     const trainedDataPath = path.join(__dirname, '..', 'eng.traineddata');
     if (!fs.existsSync(trainedDataPath)) {
       console.error(`[OCR] FATAL: eng.traineddata not found at ${trainedDataPath}. It must be committed to git and present in the deployed repo.`);
       return res.status(500).json({ error: 'OCR language data missing on server (eng.traineddata not found).' });
     }
     console.log(`[OCR] Using trained data at ${trainedDataPath} (${fs.statSync(trainedDataPath).size} bytes)`);
-
     processedImagePath = path.join(uploadDir, `proc_${req.file.filename}.png`);
     await sharp(req.file.path)
       .rotate()
@@ -80,7 +68,6 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
       .sharpen()
       .png()
       .toFile(processedImagePath);
-
     const worker = await Tesseract.createWorker('eng', 1, {
       langPath: path.join(__dirname, '..'),
       gzip: false,
@@ -101,26 +88,20 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
       await worker.terminate();
     }
     console.log(`[OCR] extracted ${rawText.trim().length} chars, confidence ${ocrConfidence}`);
-
     fs.unlink(req.file.path, () => {});
     fs.unlink(processedImagePath, () => {});
-
     if (!rawText || !rawText.trim()) {
       return res.status(200).json({ success: true, extracted: false });
     }
-
     let parsed = parseInvoice(rawText);
-
     if (!parsed.name || !parsed.amount) {
       try {
         const prompt = 'Extract these fields from the receipt text below and respond with ONLY valid JSON, no explanation, no markdown fences.\nFields: name, brand, store, date (YYYY-MM-DD), amount (number only, no currency symbol), invoiceNumber, expiryDate (YYYY-MM-DD or empty string), notes, category (one of Property, Electronics, Vehicles, Gadgets, Jewelry, Furniture, Other), subType, specField1, specField2.\nIf a field is not found use an empty string.\n\nReceipt text:\n' + rawText;
-        
         const ollamaRes = await fetch(OLLAMA_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ model: OLLAMA_MODEL, prompt, format: 'json', stream: false })
         });
-
         if (ollamaRes.ok) {
           const ollamaJson = await ollamaRes.json();
           const llmParsed = JSON.parse(ollamaJson.response);
@@ -130,14 +111,11 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
         console.error("Backup LLM extraction failed, returning default regex map:", llmError);
       }
     }
-
     return res.status(200).json({ success: true, extracted: true, data: parsed, rawText });
   } catch (err) {
     if (req.file && fs.existsSync(req.file.path)) fs.unlink(req.file.path, () => {});
     if (processedImagePath && fs.existsSync(processedImagePath)) fs.unlink(processedImagePath, () => {});
-    
     return res.status(500).json({ error: err.message });
   }
 });
-
 module.exports = router;
