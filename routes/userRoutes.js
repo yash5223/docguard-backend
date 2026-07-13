@@ -1,13 +1,77 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
 const { sendOtpEmail } = require('../utils/mailer');
 const router = express.Router();
+const EMAIL_REGEX = /^[\w.\-]+@[\w-]+\.[a-zA-Z]{2,}$/;
+router.post('/register/send-otp', async (req, res) => {
+  try {
+    const { email } = req.body;
+    const cleanEmail = (email || '').toLowerCase().trim();
+    if (!cleanEmail || !EMAIL_REGEX.test(cleanEmail)) {
+      return res.status(400).json({ error: 'A valid email address is required.' });
+    }
+    if (await User.findOne({ email: cleanEmail })) {
+      return res.status(400).json({ error: 'Email address already registered.' });
+    }
+    const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await Otp.deleteMany({ contactInfo: cleanEmail, purpose: { $in: ['register', 'register_verified'] } });
+    await Otp.create({ contactInfo: cleanEmail, otpCode, expiresAt, purpose: 'register' });
+    try {
+      await sendOtpEmail(cleanEmail, otpCode, 'register');
+    } catch (mailErr) {
+      console.error('[OTP] Failed to send registration email:', mailErr.message);
+      await Otp.deleteMany({ contactInfo: cleanEmail, purpose: 'register' });
+      return res.status(500).json({ error: 'Could not send verification email. Please try again in a moment.' });
+    }
+    res.status(200).json({ success: true, message: 'Verification code sent to your email' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router.post('/register/verify-otp', async (req, res) => {
+  try {
+    const { email, otpCode } = req.body;
+    const cleanEmail = (email || '').toLowerCase().trim();
+    if (!cleanEmail || !otpCode) {
+      return res.status(400).json({ error: 'Email and verification code are required.' });
+    }
+    const match = await Otp.findOne({ contactInfo: cleanEmail, otpCode, purpose: 'register' });
+    if (!match) {
+      return res.status(400).json({ error: 'Invalid verification code.' });
+    }
+    if (match.expiresAt < new Date()) {
+      await Otp.deleteOne({ _id: match._id });
+      return res.status(400).json({ error: 'This code has expired. Please request a new one.' });
+    }
+    await Otp.deleteOne({ _id: match._id });
+    const verificationToken = crypto.randomBytes(24).toString('hex');
+    const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    await Otp.create({ contactInfo: cleanEmail, otpCode: verificationToken, expiresAt: tokenExpiresAt, purpose: 'register_verified' });
+    res.status(200).json({ success: true, verificationToken });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 router.post('/register', async (req, res) => {
   try {
-    const { fullName, dob, gender, email, phone, aadhaar, passwordHash } = req.body;
-    if (await User.findOne({ email: email.toLowerCase().trim() })) {
+    const { fullName, dob, gender, email, phone, aadhaar, passwordHash, verificationToken } = req.body;
+    const cleanEmail = email.toLowerCase().trim();
+    if (!verificationToken) {
+      return res.status(400).json({ error: 'Email verification is required before creating an account.' });
+    }
+    const verified = await Otp.findOne({ contactInfo: cleanEmail, otpCode: verificationToken, purpose: 'register_verified' });
+    if (!verified) {
+      return res.status(400).json({ error: 'Email verification is required or has expired. Please verify your email again.' });
+    }
+    if (verified.expiresAt < new Date()) {
+      await Otp.deleteOne({ _id: verified._id });
+      return res.status(400).json({ error: 'Email verification has expired. Please verify your email again.' });
+    }
+    if (await User.findOne({ email: cleanEmail })) {
       return res.status(400).json({ error: 'Email address already registered.' });
     }
     if (await User.findOne({ phone: phone.trim() })) {
@@ -31,13 +95,15 @@ router.post('/register', async (req, res) => {
       fullName,
       dob: new Date(dob),
       gender,
-      email: email.toLowerCase().trim(),
+      email: cleanEmail,
       phone: phone.trim(),
       aadhaar: aadhaar.trim(),
       passwordHash: hashedPassword,
       customer_id: generatedCustomerId, 
-      subscription_plan: ""             
+      subscription_plan: "",
+      emailVerified: true
     });
+    await Otp.deleteOne({ _id: verified._id });
     res.status(201).json({ 
       success: true, 
       message: 'Account created successfully',
