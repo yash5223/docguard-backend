@@ -36,40 +36,30 @@ router.post('/save-asset', upload.array('images', 10), async (expressRequest, ex
         assetDocuments.push(secureUrl);
       }
     }
-    // Category-specific spec fields sent by the client with proper, descriptive
-    // names (e.g. modelNumber, serialNumber) instead of generic specField1/specField2.
-    // Only the pair relevant to assetData.category will actually be populated,
-    // but we accept any of them defensively.
+    // Every field the client sends (whatever the document type needs -
+    // documentType, documentNumber, issuingAuthority, issueDate, expiryDate,
+    // additionalRefNumber, extraDetail1/2, subSubCategory, or any future
+    // custom field) is stored dynamically so no data ever gets dropped,
+    // regardless of the exact key names a given form uses.
+    const knownDateKeys = ['purchaseOrRegDate', 'warrantyExpiry', 'issueDate', 'expiryDate'];
+    const normalizedData = { ...assetData };
+    knownDateKeys.forEach((key) => {
+      if (normalizedData[key]) {
+        const parsedDate = new Date(normalizedData[key]);
+        if (!isNaN(parsedDate.getTime())) normalizedData[key] = parsedDate;
+      }
+    });
     const newAsset = new Asset({
+      ...normalizedData,
       userId: userMatch.customer_id,
       name: assetData.name,
       category: assetData.category,
-      subCategory: assetData.subCategory,
-      brandOrDeveloper: assetData.brandOrDeveloper,
-      storeOrSeller: assetData.storeOrSeller,
-      purchaseOrRegDate: assetData.purchaseOrRegDate ? new Date(assetData.purchaseOrRegDate) : null,
       valueAmount: parseFloat(assetData.valueAmount) || 0,
-      invoiceOrDeedNumber: assetData.invoiceOrDeedNumber,
-      warrantyExpiry: assetData.warrantyExpiry ? new Date(assetData.warrantyExpiry) : null,
-      notesOrAddress: assetData.notesOrAddress,
-      // Property
-      builtUpArea: assetData.builtUpArea || '',
-      reraKhataNumber: assetData.reraKhataNumber || '',
-      // Vehicles
-      registrationNumber: assetData.registrationNumber || '',
-      mileage: assetData.mileage || '',
-      // Gadgets / Electronics
-      modelNumber: assetData.modelNumber || '',
-      serialNumber: assetData.serialNumber || '',
-      // Jewelry
-      caratPurity: assetData.caratPurity || '',
-      weightMaterial: assetData.weightMaterial || '',
-      // Furniture
-      dimensions: assetData.dimensions || '',
-      materialType: assetData.materialType || '',
-      // Other
-      customAttribute1: assetData.customAttribute1 || '',
-      customAttribute2: assetData.customAttribute2 || '',
+      // Canonical aliases kept in sync so existing warranty/dashboard logic
+      // (which reads warrantyExpiry / purchaseOrRegDate) keeps working even
+      // when a form sends the newer expiryDate / issueDate names instead.
+      warrantyExpiry: normalizedData.warrantyExpiry || normalizedData.expiryDate || null,
+      purchaseOrRegDate: normalizedData.purchaseOrRegDate || normalizedData.issueDate || null,
       documents: assetDocuments
     });
     await newAsset.save();
@@ -216,7 +206,11 @@ router.get('/fetch-assets', async (expressRequest, expressResponse) => {
       const searchRegex = new RegExp(search.trim(), 'i');
       queryConditions.$or = [
         { name: searchRegex },
-        { brandOrDeveloper: searchRegex }
+        { brandOrDeveloper: searchRegex },
+        { issuingAuthority: searchRegex },
+        { category: searchRegex },
+        { subCategory: searchRegex },
+        { documentType: searchRegex }
       ];
     }
     const userAssets = await Asset.find(queryConditions).sort({ createdAt: -1 });

@@ -38,5 +38,5 @@ const AssetSchema = new mongoose.Schema({
   documents: [{ type: String }],
   serviceRecords: [ServiceRecordSchema], // 🛠️ ADDED: Array definition matching your screen log
   createdAt: { type: Date, default: Date.now }
-});
+}, { strict: false });
 module.exports = mongoose.model('Asset', AssetSchema);

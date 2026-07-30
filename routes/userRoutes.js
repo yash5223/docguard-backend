@@ -25,7 +25,8 @@ router.post('/register/send-otp', async (req, res) => {
     } catch (mailErr) {
       console.error('[OTP] Failed to send registration email:', mailErr.message);
       await Otp.deleteMany({ contactInfo: cleanEmail, purpose: 'register' });
-      return res.status(500).json({ error: 'Could not send verification email. Please try again in a moment.' });
+      const debugDetail = process.env.DEBUG_EMAIL_ERRORS === 'true' ? ` (${mailErr.message})` : '';
+      return res.status(500).json({ error: `Could not send verification email. Please try again in a moment.${debugDetail}` });
     }
     res.status(200).json({ success: true, message: 'Verification code sent to your email' });
   } catch (err) {
