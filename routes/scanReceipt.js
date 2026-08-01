@@ -5,6 +5,7 @@ const path = require('path');
 const router = express.Router();
 
 const { runOcr, SUPPORTED_MIMETYPES } = require('../utils/ocrEngine');
+const { detectFileType } = require('../utils/detectFileType');
 const { classifyDocument } = require('../config/documentSignatures');
 const { getFieldsForDocumentType } = require('../config/documentFieldTemplates');
 const { extractFieldsForDocumentType, extractName, extractNotes, extractStoreOrSeller } = require('../utils/fieldExtractors');
@@ -17,12 +18,10 @@ if (!fs.existsSync(uploadDir)) {
 const upload = multer({
   dest: uploadDir,
   limits: { fileSize: 15 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (!SUPPORTED_MIMETYPES.has(file.mimetype)) {
-      return cb(new Error(`Unsupported file type "${file.mimetype}". Supported: JPEG, PNG, WEBP, HEIC, PDF.`));
-    }
-    cb(null, true);
-  },
+  // No fileFilter here: the client-supplied Content-Type can't be trusted
+  // (many HTTP clients send "application/octet-stream" when they can't
+  // infer a type from the file path). The file is validated by sniffing
+  // its actual bytes once it's on disk, below.
 });
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434/api/generate';
@@ -58,6 +57,13 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
     }
     tmpFiles.push(req.file.path);
 
+    const detectedType = detectFileType(req.file.path);
+    if (!detectedType) {
+      return res.status(400).json({
+        error: `Unrecognized file type. Supported: JPEG, PNG, WEBP, HEIC, PDF. (Client sent Content-Type: "${req.file.mimetype}")`,
+      });
+    }
+
     const trainedDataPath = path.join(__dirname, '..', 'eng.traineddata');
     if (!fs.existsSync(trainedDataPath)) {
       console.error(`[OCR] FATAL: eng.traineddata not found at ${trainedDataPath}.`);
@@ -67,7 +73,7 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
     const baseName = path.basename(req.file.filename, path.extname(req.file.filename));
     const { text: rawText, confidence: ocrConfidence } = await runOcr({
       filePath: req.file.path,
-      mimetype: req.file.mimetype,
+      mimetype: detectedType,
       tmpDir: uploadDir,
       baseName,
     });
