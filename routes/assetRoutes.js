@@ -4,6 +4,7 @@ const multer = require('multer');
 const router = express.Router();
 const User = require('../models/User');
 const Asset = require('../models/Asset');
+const { buildDynamicFields } = require('../config/documentFieldTemplates');
 const { uploadBufferToCloudinary, deleteFromCloudinaryByUrl } = require('../utils/cloudinary');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 router.post('/save-asset', upload.array('images', 10), async (expressRequest, expressResponse) => {
@@ -36,30 +37,28 @@ router.post('/save-asset', upload.array('images', 10), async (expressRequest, ex
         assetDocuments.push(secureUrl);
       }
     }
-    // Every field the client sends (whatever the document type needs -
-    // documentType, documentNumber, issuingAuthority, issueDate, expiryDate,
-    // additionalRefNumber, extraDetail1/2, subSubCategory, or any future
-    // custom field) is stored dynamically so no data ever gets dropped,
-    // regardless of the exact key names a given form uses.
-    const knownDateKeys = ['purchaseOrRegDate', 'warrantyExpiry', 'issueDate', 'expiryDate'];
-    const normalizedData = { ...assetData };
-    knownDateKeys.forEach((key) => {
-      if (normalizedData[key]) {
-        const parsedDate = new Date(normalizedData[key]);
-        if (!isNaN(parsedDate.getTime())) normalizedData[key] = parsedDate;
-      }
-    });
+    // Only the dynamic fields that are actually relevant to this
+    // documentType get a real value; everything else on the schema is
+    // explicitly stored as '' (see config/documentFieldTemplates.js).
+    // E.g. Personal > Gadgets & Appliances > Mobile Phone currently maps to
+    // the default field set (documentNumber, issuingAuthority, expiryDate,
+    // valueAmount) — invoiceNumber would be stored as '' for that type.
+    const dynamicFields = buildDynamicFields(assetData.documentType, assetData);
+
+    const issueDateValue = assetData.issueDate;
+    const storeOrSellerValue = assetData.storeOrSeller || '';
+
     const newAsset = new Asset({
-      ...normalizedData,
       userId: userMatch.customer_id,
       name: assetData.name,
       category: assetData.category,
-      valueAmount: parseFloat(assetData.valueAmount) || 0,
-      // Canonical aliases kept in sync so existing warranty/dashboard logic
-      // (which reads warrantyExpiry / purchaseOrRegDate) keeps working even
-      // when a form sends the newer expiryDate / issueDate names instead.
-      warrantyExpiry: normalizedData.warrantyExpiry || normalizedData.expiryDate || null,
-      purchaseOrRegDate: normalizedData.purchaseOrRegDate || normalizedData.issueDate || null,
+      subCategory: assetData.subCategory,
+      subSubCategory: assetData.subSubCategory || '',
+      documentType: assetData.documentType || '',
+      issueDate: issueDateValue ? new Date(issueDateValue) : null,
+      notesOrAddress: assetData.notesOrAddress || '',
+      storeOrSeller: storeOrSellerValue,
+      ...dynamicFields,
       documents: assetDocuments
     });
     await newAsset.save();
@@ -129,12 +128,12 @@ router.get('/dashboard-summary', async (expressRequest, expressResponse) => {
       totalValue += asset.valueAmount || 0;
       if (asset.category === 'Property') {
         activeCount++;
-      } else if (asset.warrantyExpiry) {
-        const expiryDate = new Date(asset.warrantyExpiry);
-        if (expiryDate >= rightNow) {
-          activeCount++;
-        } else {
+      } else if (asset.expiryDate) {
+        const expiryDate = new Date(asset.expiryDate);
+        if (!isNaN(expiryDate.getTime()) && expiryDate < rightNow) {
           expiredCount++;
+        } else {
+          activeCount++;
         }
       } else {
         activeCount++;
@@ -206,11 +205,8 @@ router.get('/fetch-assets', async (expressRequest, expressResponse) => {
       const searchRegex = new RegExp(search.trim(), 'i');
       queryConditions.$or = [
         { name: searchRegex },
-        { brandOrDeveloper: searchRegex },
-        { issuingAuthority: searchRegex },
-        { category: searchRegex },
-        { subCategory: searchRegex },
-        { documentType: searchRegex }
+        { documentType: searchRegex },
+        { storeOrSeller: searchRegex }
       ];
     }
     const userAssets = await Asset.find(queryConditions).sort({ createdAt: -1 });

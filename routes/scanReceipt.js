@@ -15,33 +15,67 @@ function extract(regex, text) {
   if (!match) return "";
   return (match[1] || match[0]).trim();
 }
-function parseInvoice(text) {
-  // Updated standard default parser context to default to Property
-  let detectedCategory = "Property";
-  if (/\b(car|motorcycle|suv|sedan|mileage|vin|registration|chassis)\b/i.test(text)) {
-    detectedCategory = "Vehicles";
-  } else if (/\b(phone|smartphone|laptop|macbook|smartwatch|tablet|ipad)\b/i.test(text)) {
-    detectedCategory = "Gadgets";
-  } else if (/\b(gold|diamond|carat|purity|jewelry|necklace|ring|silver)\b/i.test(text)) {
-    detectedCategory = "Jewelry";
-  } else if (/\b(tv|television|refrigerator|fridge|ac|washer|dryer|microwave)\b/i.test(text)) {
-    detectedCategory = "Electronics";
-  } else if (/\b(sofa|chair|table|desk|bed|furniture|wood|mattress)\b/i.test(text)) {
-    detectedCategory = "Furniture";
-  } else if (/\b(other|misc|miscellaneous)\b/i.test(text)) {
-    detectedCategory = "Other";
+// Maps detected keywords to the app's real category tree:
+// top-level category -> subCategory -> documentType (leaf item), so
+// _applyCategoryFromOcr on the client can actually match it.
+function detectCategoryAndType(text) {
+  if (/\b(car|motorcycle|suv|sedan|mileage|vin|registration number|chassis|puc\b)\b/i.test(text)) {
+    const isPuc = /\bpuc\b/i.test(text);
+    return { category: 'Personal', subCategory: 'Vehicle', documentType: isPuc ? 'PUC Certificate' : 'RC Book' };
   }
+  if (/\b(gold|diamond|carat|purity|jewel+ery|necklace|\bring\b|silver|hallmark)\b/i.test(text)) {
+    const isHallmark = /hallmark/i.test(text);
+    return { category: 'Personal', subCategory: 'Jewellery', documentType: isHallmark ? 'Hallmark Certificate' : 'Purchase Invoice' };
+  }
+  if (/\b(flat|apartment|villa|plot|khata|\brera\b|sale deed|built[- ]?up area)\b/i.test(text)) {
+    const isDeed = /sale deed/i.test(text);
+    return { category: 'Personal', subCategory: 'Property', documentType: isDeed ? 'Sale Deeds' : 'Purchase Documents' };
+  }
+  if (/\b(policy|insurer|sum insured|sum assured|premium)\b/i.test(text)) {
+    let documentType = 'Health Insurance';
+    if (/\bvehicle\b/i.test(text)) documentType = 'Vehicle Insurance';
+    else if (/\blife\b/i.test(text)) documentType = 'Life Insurance';
+    else if (/\bhome\b/i.test(text)) documentType = 'Home Insurance';
+    else if (/\btravel\b/i.test(text)) documentType = 'Travel Insurance';
+    return { category: 'Personal', subCategory: 'Insurance', documentType };
+  }
+  if (/\b(phone|smartphone|laptop|macbook|smartwatch|tablet|ipad|\btv\b|television|refrigerator|fridge|\bac\b|washer|dryer|microwave)\b/i.test(text)) {
+    return { category: 'Personal', subCategory: 'Gadgets & Appliances', documentType: 'Mobile Phone' };
+  }
+  // Default: most scanned receipts are retail purchase invoices for a gadget/appliance.
+  return { category: 'Personal', subCategory: 'Gadgets & Appliances', documentType: 'Purchase Invoice' };
+}
+
+function parseInvoice(text) {
+  const { category, subCategory, documentType } = detectCategoryAndType(text);
   const nameMatch = extract(/(?:Description|Product|Item|Asset|Property Name)\s*[: ]\s*([A-Za-z0-9 ]+)/i, text);
+
+  // Kept separate on purpose: `store` (who it was bought/registered FROM,
+  // e.g. "Croma", "DLF Properties") vs `brand` (who MADE/manufactures it,
+  // e.g. "Samsung"). Conflating the two loses information, so both are
+  // extracted independently and both are always returned to the caller.
+  const store = extract(/(?:Store|Seller|Broker|Vendor|Agency|Dealer)\s*[: ]\s*([A-Za-z0-9 ]+)/i, text)
+    || extract(/\b(Reliance Digital|Croma|Vijay Sales)\b/i, text);
+  const brand = extract(/(?:Brand|Builder|Developer|Manufacturer)\s*[: ]\s*([A-Za-z0-9 ]+)/i, text)
+    || extract(/\b(LG|Samsung|Sony|Whirlpool|Godrej|IFB|Haier|Bosch|Panasonic|DLF|Godrej Properties|Tata)\b/i, text);
+
   return {
-    category: detectedCategory,
+    category,
+    subCategory,
+    documentType,
     name: nameMatch || extract(/^([A-Za-z0-9 ]{3,24})/m, text),
-    subType: extract(/(?:Type|Sub-Category)\s*[: ]\s*([A-Za-z0-9 ]+)/i, text) || extract(/\b(Apartment|Villa|SUV|Sedan|Smartphone|Laptop|TV|Sofa)\b/i, text),
-    brand: extract(/(?:Brand|Builder|Developer|Manufacturer)\s*[: ]\s*([A-Za-z0-9 ]+)/i, text) || extract(/\b(LG|Samsung|Sony|Whirlpool|Godrej|IFB|Haier|Bosch|Panasonic|DLF|Godrej Properties|Tata)\b/i, text),
-    store: extract(/(?:Store|Seller|Broker|Vendor|Agency)\s*[: ]\s*([A-Za-z0-9 ]+)/i, text) || extract(/\b(Reliance Digital|Croma|Vijay Sales)\b/i, text),
-    date: extract(/(?:Invoice|Purchase|Registration)\s*Date\s*[: ]\s*([\d-]+)/i, text) || extract(/(\d{4}-\d{2}-\d{2})/, text),
+    // `store` is always surfaced on its own key so it is never silently
+    // dropped by callers that only look for a generic "issuingAuthority".
+    store,
+    storeOrSeller: store,
+    brand,
+    issuingAuthority: store || brand || '',
+    date: extract(/(?:Invoice|Purchase|Registration|Issue)\s*Date\s*[: ]\s*([\d-]+)/i, text) || extract(/(\d{4}-\d{2}-\d{2})/, text),
+    issueDate: extract(/(?:Invoice|Purchase|Registration|Issue)\s*Date\s*[: ]\s*([\d-]+)/i, text) || extract(/(\d{4}-\d{2}-\d{2})/, text),
     amount: extract(/(?:Total Amount|Grand Total|Net Payable|Value|Price)\s*[: ]*₹?\s*([\d,]+\.\d+)/i, text) || extract(/Total.*?([\d,]+\.\d+)/i, text),
     invoiceNumber: extract(/(?:Invoice|Bill|Deed|Agreement|Document)\s*No\s*[:+ ]\s*([A-Z0-9-]+)/i, text),
-    expiryDate: extract(/(?:Warranty Expiry|Valid Upto)\s*[: ]\s*([\d-]+)/i, text),
+    documentNumber: extract(/(?:Registration|License Plate|Model Number|Serial Number|S\/N|Policy Number|Account Number|Certificate Number)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text),
+    expiryDate: extract(/(?:Warranty Expiry|Valid Upto|Policy Expiry|Maturity Date)\s*[: ]\s*([\d-]+)/i, text),
     notes: extract(/(?:Notes|Address|Location)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text),
     specField1: extract(/(?:Built-up Area|Plot Size|Registration|License Plate|Model Number|Carat|Purity|Dimensions)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text),
     specField2: extract(/(?:RERA|Khata|VIN|Mileage|Serial Number|S\/N|Weight|Material)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text)
@@ -96,7 +130,9 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
     let parsed = parseInvoice(rawText);
     if (!parsed.name || !parsed.amount) {
       try {
-        const prompt = 'Extract these fields from the receipt text below and respond with ONLY valid JSON, no explanation, no markdown fences.\nFields: name, brand, store, date (YYYY-MM-DD), amount (number only, no currency symbol), invoiceNumber, expiryDate (YYYY-MM-DD or empty string), notes, category (one of Property, Electronics, Vehicles, Gadgets, Jewelry, Furniture, Other), subType, specField1, specField2.\nIf a field is not found use an empty string.\n\nReceipt text:\n' + rawText;
+        const prompt = 'Extract these fields from the receipt text below and respond with ONLY valid JSON, no explanation, no markdown fences.\n'
+          + 'Fields: name, brand (manufacturer), store (seller/vendor the item was bought from - keep this SEPARATE from brand), date (YYYY-MM-DD), amount (number only, no currency symbol), invoiceNumber, documentNumber, expiryDate (YYYY-MM-DD or empty string), notes, category (always "Personal"), subCategory (one of Property, Vehicle, "Gadgets & Appliances", Jewellery, Insurance), documentType (a specific leaf type such as "Purchase Invoice", "RC Book", "Sale Deeds"), specField1, specField2.\n'
+          + 'If a field is not found use an empty string.\n\nReceipt text:\n' + rawText;
         const ollamaRes = await fetch(OLLAMA_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -105,6 +141,13 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
         if (ollamaRes.ok) {
           const ollamaJson = await ollamaRes.json();
           const llmParsed = JSON.parse(ollamaJson.response);
+          // Never let the LLM fallback silently drop the store name: only
+          // overwrite storeOrSeller/issuingAuthority when the LLM actually
+          // found a store, otherwise keep whatever the regex pass extracted.
+          if (llmParsed.store) {
+            llmParsed.storeOrSeller = llmParsed.store;
+            llmParsed.issuingAuthority = llmParsed.store;
+          }
           parsed = { ...parsed, ...llmParsed };
         }
       } catch (llmError) {
