@@ -15,6 +15,43 @@ function extract(regex, text) {
   if (!match) return "";
   return (match[1] || match[0]).trim();
 }
+// OCR text (and the LLM fallback, despite being asked for YYYY-MM-DD) can
+// hand back dates as DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY, etc. — but every
+// date field in the app (and the Flutter date picker's parser) requires
+// strict YYYY-MM-DD. This normalizes whatever we found into that shape,
+// or returns '' if it can't confidently parse it.
+function normalizeDate(rawValue) {
+  if (!rawValue) return '';
+  const trimmed = String(rawValue).trim();
+  if (!trimmed) return '';
+
+  // Already YYYY-MM-DD (or YYYY/MM/DD) — just normalize the separators.
+  let match = trimmed.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (match) {
+    const [, y, m, d] = match;
+    return toIsoDate(y, m, d);
+  }
+
+  // DD-MM-YYYY / DD/MM/YYYY / DD.MM.YYYY — the common format on Indian
+  // documents (and what OCR most often yields).
+  match = trimmed.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (match) {
+    const [, d, m, y] = match;
+    return toIsoDate(y, m, d);
+  }
+
+  return '';
+}
+
+function toIsoDate(year, month, day) {
+  const y = parseInt(year, 10);
+  const m = parseInt(month, 10);
+  const d = parseInt(day, 10);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return '';
+  const check = new Date(y, m - 1, d);
+  if (check.getFullYear() !== y || check.getMonth() !== m - 1 || check.getDate() !== d) return '';
+  return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
 // Maps detected keywords to the app's real category tree:
 // top-level category -> subCategory -> documentType (leaf item), so
 // _applyCategoryFromOcr on the client can actually match it.
@@ -70,12 +107,12 @@ function parseInvoice(text) {
     storeOrSeller: store,
     brand,
     issuingAuthority: store || brand || '',
-    date: extract(/(?:Invoice|Purchase|Registration|Issue)\s*Date\s*[: ]\s*([\d-]+)/i, text) || extract(/(\d{4}-\d{2}-\d{2})/, text),
-    issueDate: extract(/(?:Invoice|Purchase|Registration|Issue)\s*Date\s*[: ]\s*([\d-]+)/i, text) || extract(/(\d{4}-\d{2}-\d{2})/, text),
+    date: normalizeDate(extract(/(?:Invoice|Purchase|Registration|Issue)\s*Date\s*[: ]\s*([\d./-]+)/i, text) || extract(/(\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4})/, text)),
+    issueDate: normalizeDate(extract(/(?:Invoice|Purchase|Registration|Issue)\s*Date\s*[: ]\s*([\d./-]+)/i, text) || extract(/(\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4})/, text)),
     amount: extract(/(?:Total Amount|Grand Total|Net Payable|Value|Price)\s*[: ]*₹?\s*([\d,]+\.\d+)/i, text) || extract(/Total.*?([\d,]+\.\d+)/i, text),
     invoiceNumber: extract(/(?:Invoice|Bill|Deed|Agreement|Document)\s*No\s*[:+ ]\s*([A-Z0-9-]+)/i, text),
     documentNumber: extract(/(?:Registration|License Plate|Model Number|Serial Number|S\/N|Policy Number|Account Number|Certificate Number)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text),
-    expiryDate: extract(/(?:Warranty Expiry|Valid Upto|Policy Expiry|Maturity Date)\s*[: ]\s*([\d-]+)/i, text),
+    expiryDate: normalizeDate(extract(/(?:Warranty Expiry|Valid Upto|Policy Expiry|Maturity Date)\s*[: ]\s*([\d./-]+)/i, text)),
     notes: extract(/(?:Notes|Address|Location)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text),
     specField1: extract(/(?:Built-up Area|Plot Size|Registration|License Plate|Model Number|Carat|Purity|Dimensions)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text),
     specField2: extract(/(?:RERA|Khata|VIN|Mileage|Serial Number|S\/N|Weight|Material)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text)
@@ -149,6 +186,9 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
             llmParsed.issuingAuthority = llmParsed.store;
           }
           parsed = { ...parsed, ...llmParsed };
+          parsed.date = normalizeDate(parsed.date) || parsed.date;
+          parsed.issueDate = normalizeDate(parsed.issueDate) || parsed.issueDate;
+          parsed.expiryDate = normalizeDate(parsed.expiryDate) || parsed.expiryDate;
         }
       } catch (llmError) {
         console.error("Backup LLM extraction failed, returning default regex map:", llmError);
