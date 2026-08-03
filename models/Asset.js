@@ -18,14 +18,18 @@ const assetSchema = new mongoose.Schema(
     name: { type: String, required: true },
     category: { type: String, required: true },
     subCategory: { type: String, required: true },
-    subSubCategory: { type: String, default: '' },
-    documentType: { type: String, required: true },
+    // subSubCategory doubles as "document type" — the UI labels this field
+    // "Document Type", but since the two were always the same value, we
+    // store it once here instead of duplicating it into a separate
+    // `documentType` field.
+    subSubCategory: { type: String, required: true },
     issueDate: { type: Date },
     notesOrAddress: { type: String, default: '' },
     storeOrSeller: { type: String, default: '' },
 
-    // Dynamic fields — only the ones relevant to `documentType` get a real
-    // value when an asset is saved (see config/documentFieldTemplates.js).
+    // Dynamic fields — only the ones relevant to `subSubCategory` (the
+    // document type) get a real value when an asset is saved (see
+    // config/documentFieldTemplates.js).
     // Every other key below is explicitly stored as '' so every document
     // in the collection has the same flat, predictable shape.
     documentNumber: { type: String, default: '' },

@@ -50,15 +50,18 @@ const DEFAULT_FIELDS = ['documentNumber', 'issuingAuthority', 'expiryDate', 'val
 // The full universe of dynamic keys that exist on the Asset schema.
 const ALL_DYNAMIC_FIELDS = ['documentNumber', 'issuingAuthority', 'expiryDate', 'valueAmount', 'invoiceNumber'];
 
+// `documentType` here is the value stored in Asset.subSubCategory — the
+// DB no longer has a separate documentType field (subSubCategory and
+// documentType were always the same value, so we only store it once).
 function getFieldsForDocumentType(documentType) {
   return DOCUMENT_TYPE_FIELDS[documentType] || DEFAULT_FIELDS;
 }
 
 /**
  * Builds the dynamic-field portion of an Asset document for the given
- * documentType. Every key in ALL_DYNAMIC_FIELDS is present in the result;
- * only the ones applicable to this documentType get a real value pulled
- * from assetData — everything else is explicitly ''.
+ * documentType (i.e. Asset.subSubCategory). Every key in ALL_DYNAMIC_FIELDS
+ * is present in the result; only the ones applicable to this documentType
+ * get a real value pulled from assetData — everything else is explicitly ''.
  */
 function buildDynamicFields(documentType, assetData) {
   const applicableFields = getFieldsForDocumentType(documentType);

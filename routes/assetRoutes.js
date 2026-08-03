@@ -37,13 +37,19 @@ router.post('/save-asset', upload.array('images', 10), async (expressRequest, ex
         assetDocuments.push(secureUrl);
       }
     }
-    // Only the dynamic fields that are actually relevant to this
-    // documentType get a real value; everything else on the schema is
-    // explicitly stored as '' (see config/documentFieldTemplates.js).
+    // subSubCategory doubles as "document type" (they were always the same
+    // value, so we no longer store them as two separate fields). Fall back
+    // to a legacy `documentType` key in case any caller still sends that
+    // name instead of `subSubCategory`.
+    const documentTypeValue = assetData.subSubCategory || assetData.documentType || '';
+
+    // Only the dynamic fields that are actually relevant to this document
+    // type get a real value; everything else on the schema is explicitly
+    // stored as '' (see config/documentFieldTemplates.js).
     // E.g. Personal > Gadgets & Appliances > Mobile Phone currently maps to
     // the default field set (documentNumber, issuingAuthority, expiryDate,
     // valueAmount) — invoiceNumber would be stored as '' for that type.
-    const dynamicFields = buildDynamicFields(assetData.documentType, assetData);
+    const dynamicFields = buildDynamicFields(documentTypeValue, assetData);
 
     const issueDateValue = assetData.issueDate;
     const storeOrSellerValue = assetData.storeOrSeller || '';
@@ -53,8 +59,7 @@ router.post('/save-asset', upload.array('images', 10), async (expressRequest, ex
       name: assetData.name,
       category: assetData.category,
       subCategory: assetData.subCategory,
-      subSubCategory: assetData.subSubCategory || '',
-      documentType: assetData.documentType || '',
+      subSubCategory: documentTypeValue,
       issueDate: issueDateValue ? new Date(issueDateValue) : null,
       notesOrAddress: assetData.notesOrAddress || '',
       storeOrSeller: storeOrSellerValue,
@@ -205,7 +210,7 @@ router.get('/fetch-assets', async (expressRequest, expressResponse) => {
       const searchRegex = new RegExp(search.trim(), 'i');
       queryConditions.$or = [
         { name: searchRegex },
-        { documentType: searchRegex },
+        { subSubCategory: searchRegex },
         { storeOrSeller: searchRegex }
       ];
     }
