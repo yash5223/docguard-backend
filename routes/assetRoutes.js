@@ -6,7 +6,7 @@ const User = require('../models/User');
 const Asset = require('../models/Asset');
 const { buildDynamicFields } = require('../config/documentFieldTemplates');
 const { uploadBufferToCloudinary, deleteFromCloudinaryByUrl } = require('../utils/cloudinary');
-const { createAlert } = require('./alertRoutes');
+const { createAlert, checkExpiryAlerts } = require('./alertRoutes');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 router.post('/save-asset', upload.array('images', 10), async (expressRequest, expressResponse) => {
   try {
@@ -137,6 +137,7 @@ router.get('/dashboard-summary', async (expressRequest, expressResponse) => {
       return expressResponse.status(404).json({ error: 'User account profile not found.' });
     }
     const userAssets = await Asset.find({ userId: userMatch.customer_id });
+    await checkExpiryAlerts(userMatch, userAssets);
     let totalValue = 0;
     let activeCount = 0;
     let expiredCount = 0;
@@ -235,6 +236,7 @@ router.get('/fetch-assets', async (expressRequest, expressResponse) => {
       ];
     }
     const userAssets = await Asset.find(queryConditions).sort({ createdAt: -1 });
+    await checkExpiryAlerts(userMatch, userAssets);
     return expressResponse.status(200).json({
       success: true,
       assets: userAssets

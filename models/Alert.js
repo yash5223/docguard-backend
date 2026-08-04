@@ -16,6 +16,7 @@ const alertSchema = new mongoose.Schema(
     },
     sent_by: { type: String, default: 'System' },
     sent_to: { type: String, required: true, index: true },
+    related_asset_id: { type: String, default: null, index: true },
     is_read: { type: Boolean, default: false },
     created_at: { type: Date, default: Date.now },
     created_time: { type: String, default: () => new Date().toLocaleTimeString() },
