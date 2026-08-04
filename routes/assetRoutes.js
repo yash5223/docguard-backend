@@ -6,6 +6,7 @@ const User = require('../models/User');
 const Asset = require('../models/Asset');
 const { buildDynamicFields } = require('../config/documentFieldTemplates');
 const { uploadBufferToCloudinary, deleteFromCloudinaryByUrl } = require('../utils/cloudinary');
+const { createAlert } = require('./alertRoutes');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 router.post('/save-asset', upload.array('images', 10), async (expressRequest, expressResponse) => {
   try {
@@ -67,6 +68,17 @@ router.post('/save-asset', upload.array('images', 10), async (expressRequest, ex
       documents: assetDocuments
     });
     await newAsset.save();
+    const isEdit = Boolean(assetData._id || assetData.id);
+    await createAlert({
+      title: isEdit ? 'Document Updated' : 'Document Added',
+      message: isEdit
+        ? `"${newAsset.name}" was updated in your vault.`
+        : `"${newAsset.name}" was added to your vault.`,
+      type: 'success',
+      priority: 'low',
+      sent_by: userMatch.fullName || userMatch.email,
+      sent_to: userMatch.customer_id,
+    });
     return expressResponse.status(201).json({ success: true, message: 'Asset successfully saved to vault.' });
   } catch (serverError) {
     return expressResponse.status(500).json({ error: serverError.message });
@@ -190,6 +202,14 @@ router.delete('/delete-asset/:id', async (req, res) => {
     const filesToDelete = asset.documents || [];
     await Promise.all(filesToDelete.map(filename => deleteFromCloudinaryByUrl(filename)));
     await Asset.findByIdAndDelete(assetId);
+    await createAlert({
+      title: 'Document Deleted',
+      message: `"${asset.name}" was removed from your vault.`,
+      type: 'warning',
+      priority: 'medium',
+      sent_by: 'System',
+      sent_to: asset.userId,
+    });
     return res.status(200).json({ success: true, message: 'Asset and all associated files deleted successfully.' });
   } catch (err) {
     return res.status(500).json({ error: err.message });
