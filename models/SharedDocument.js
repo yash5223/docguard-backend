@@ -1,0 +1,32 @@
+const mongoose = require('mongoose');
+
+const SharedDocumentSchema = new mongoose.Schema(
+  {
+    ownerCustomerId: { type: String, required: true, index: true },
+    ownerName: { type: String, default: '' },
+    ownerEmail: { type: String, default: '' },
+
+    receiverCustomerId: { type: String, default: null, index: true },
+    receiverEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
+    receiverName: { type: String, default: '' },
+
+    assetId: { type: String, required: true },
+    documentPath: { type: String, required: true },
+    documentName: { type: String, default: '' },
+
+    category: { type: String, default: '' },
+    subCategory: { type: String, default: '' },
+    subSubCategory: { type: String, default: '' },
+
+    sharedAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true }
+);
+
+// Prevent the exact same document from being shared to the same receiver twice
+SharedDocumentSchema.index(
+  { ownerCustomerId: 1, receiverEmail: 1, assetId: 1, documentPath: 1 },
+  { unique: true }
+);
+
+module.exports = mongoose.model('SharedDocument', SharedDocumentSchema);
