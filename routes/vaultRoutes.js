@@ -219,7 +219,9 @@ function serializeShare(share) {
     ownerEmail: share.ownerEmail,
     receiverName: share.receiverName,
     receiverEmail: share.receiverEmail,
+    status: share.status || 'active',
     sharedAt: share.sharedAt,
+    revokedAt: share.revokedAt || null,
   };
 }
 
@@ -258,6 +260,8 @@ router.post('/share-document', async (req, res) => {
     if (receiverUser.customer_id === owner.customer_id) {
       return res.status(400).json({ error: "You can't share a document with yourself." });
     }
+    // Re-sharing a previously revoked document reactivates the same history record
+    // instead of creating a duplicate, so the share's timeline stays intact.
     const share = await SharedDocument.findOneAndUpdate(
       {
         ownerCustomerId: owner.customer_id,
@@ -275,7 +279,9 @@ router.post('/share-document', async (req, res) => {
           category: asset.category,
           subCategory: asset.subCategory,
           subSubCategory: asset.subSubCategory,
+          status: 'active',
           sharedAt: new Date(),
+          revokedAt: null,
         },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -291,13 +297,15 @@ router.post('/share-document', async (req, res) => {
     return res.status(201).json({ success: true, message: 'Document shared successfully.', share: serializeShare(share) });
   } catch (err) {
     if (err && err.code === 11000) {
+      // Rare race on the unique (owner, receiver, asset, document) index — the
+      // record already exists, so treat it as a successful share.
       return res.status(200).json({ success: true, message: 'Document shared successfully.' });
     }
     return res.status(500).json({ error: err.message });
   }
 });
 
-// 7. LIST DOCUMENTS SHARED WITH THE CURRENT USER (received)
+// 7. LIST DOCUMENTS SHARED WITH THE CURRENT USER (received — active shares only)
 router.get('/shared-with-me', async (req, res) => {
   try {
     const { email } = req.query;
@@ -310,6 +318,7 @@ router.get('/shared-with-me', async (req, res) => {
     }
     const shares = await SharedDocument.find({
       $or: [{ receiverCustomerId: user.customer_id }, { receiverEmail: user.email }],
+      status: 'active',
     }).sort({ sharedAt: -1 });
     return res.status(200).json({ success: true, documents: shares.map(serializeShare) });
   } catch (err) {
@@ -317,7 +326,7 @@ router.get('/shared-with-me', async (req, res) => {
   }
 });
 
-// 8. LIST DOCUMENTS THE CURRENT USER HAS SHARED OUT (sent)
+// 8. LIST DOCUMENTS THE CURRENT USER HAS SHARED OUT (sent — includes history of revoked shares)
 router.get('/shared-by-me', async (req, res) => {
   try {
     const { email } = req.query;
@@ -335,7 +344,7 @@ router.get('/shared-by-me', async (req, res) => {
   }
 });
 
-// 9. REVOKE A SHARE (stop sharing a document)
+// 9. REVOKE A SHARE (stop sharing a document, keeping it in history)
 router.delete('/shared/:id', async (req, res) => {
   try {
     const { email } = req.query;
@@ -351,8 +360,10 @@ router.delete('/shared/:id', async (req, res) => {
     if (!share) {
       return res.status(404).json({ error: 'Shared document not found.' });
     }
-    await SharedDocument.deleteOne({ _id: share._id });
-    return res.status(200).json({ success: true, message: 'Stopped sharing this document.' });
+    share.status = 'revoked';
+    share.revokedAt = new Date();
+    await share.save();
+    return res.status(200).json({ success: true, message: 'Stopped sharing this document.', share: serializeShare(share) });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

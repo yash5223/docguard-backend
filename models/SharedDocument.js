@@ -18,7 +18,9 @@ const SharedDocumentSchema = new mongoose.Schema(
     subCategory: { type: String, default: '' },
     subSubCategory: { type: String, default: '' },
 
+    status: { type: String, enum: ['active', 'revoked'], default: 'active', index: true },
     sharedAt: { type: Date, default: Date.now },
+    revokedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
