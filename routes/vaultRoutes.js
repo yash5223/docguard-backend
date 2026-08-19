@@ -286,6 +286,7 @@ router.post('/share-document', async (req, res) => {
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    // Notify the receiver that a document was shared with them.
     await createAlert({
       title: 'Document Shared With You',
       message: `${owner.fullName || owner.email} shared "${documentName || asset.name}" with you.`,
@@ -293,6 +294,17 @@ router.post('/share-document', async (req, res) => {
       priority: 'low',
       sent_by: owner.fullName || owner.email,
       sent_to: receiverUser.customer_id,
+      related_asset_id: String(assetId),
+    });
+    // Notify the sender/owner as confirmation that the share went through.
+    await createAlert({
+      title: 'Document Shared',
+      message: `You shared "${documentName || asset.name}" with ${receiverUser.fullName || receiverUser.email}.`,
+      type: 'success',
+      priority: 'low',
+      sent_by: 'System',
+      sent_to: owner.customer_id,
+      related_asset_id: String(assetId),
     });
     return res.status(201).json({ success: true, message: 'Document shared successfully.', share: serializeShare(share) });
   } catch (err) {
@@ -363,6 +375,30 @@ router.delete('/shared/:id', async (req, res) => {
     share.status = 'revoked';
     share.revokedAt = new Date();
     await share.save();
+
+    // Notify the receiver that access to the document has been revoked.
+    if (share.receiverCustomerId) {
+      await createAlert({
+        title: 'Document Access Revoked',
+        message: `${owner.fullName || owner.email} stopped sharing "${share.documentName}" with you.`,
+        type: 'warning',
+        priority: 'low',
+        sent_by: owner.fullName || owner.email,
+        sent_to: share.receiverCustomerId,
+        related_asset_id: share.assetId,
+      });
+    }
+    // Notify the owner/sender as confirmation that sharing was stopped.
+    await createAlert({
+      title: 'Stopped Sharing Document',
+      message: `You stopped sharing "${share.documentName}" with ${share.receiverName || share.receiverEmail}.`,
+      type: 'info',
+      priority: 'low',
+      sent_by: 'System',
+      sent_to: owner.customer_id,
+      related_asset_id: share.assetId,
+    });
+
     return res.status(200).json({ success: true, message: 'Stopped sharing this document.', share: serializeShare(share) });
   } catch (err) {
     return res.status(500).json({ error: err.message });
