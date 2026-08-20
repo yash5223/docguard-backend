@@ -55,7 +55,10 @@ router.post('/save-asset', upload.array('images', 10), async (expressRequest, ex
     const issueDateValue = assetData.issueDate;
     const storeOrSellerValue = assetData.storeOrSeller || '';
 
-    const newAsset = new Asset({
+    const editAssetId = assetData._id || assetData.id;
+    const isEdit = Boolean(editAssetId);
+
+    const assetFields = {
       userId: userMatch.customer_id,
       name: assetData.name,
       category: assetData.category,
@@ -65,21 +68,51 @@ router.post('/save-asset', upload.array('images', 10), async (expressRequest, ex
       notesOrAddress: assetData.notesOrAddress || '',
       storeOrSeller: storeOrSellerValue,
       ...dynamicFields,
-      documents: assetDocuments
-    });
-    await newAsset.save();
-    const isEdit = Boolean(assetData._id || assetData.id);
+    };
+    // Only touch `documents` if new images were actually uploaded this time,
+    // otherwise we'd wipe out the asset's existing document list on a plain
+    // details edit.
+    if (assetDocuments.length > 0) {
+      assetFields.documents = assetDocuments;
+    }
+
+    let savedAsset;
+    if (isEdit) {
+      // Update the existing asset in place. Using findByIdAndUpdate (rather
+      // than creating a fresh document) is what preserves the asset's
+      // original `_id` and its existing `serviceRecords` / `documents`
+      // subdocuments — previously every edit created a brand-new duplicate
+      // Asset with an empty serviceRecords array, orphaning the original
+      // one and breaking edit/delete of its service records (the app kept
+      // referencing an `_id` whose sibling duplicate no longer matched).
+      savedAsset = await Asset.findOneAndUpdate(
+        { _id: editAssetId, userId: userMatch.customer_id },
+        { $set: assetFields },
+        { new: true, runValidators: true }
+      );
+      if (!savedAsset) {
+        return expressResponse.status(404).json({ error: 'Asset to update was not found.' });
+      }
+      if (assetDocuments.length > 0) {
+        savedAsset.documents = [...(savedAsset.documents || []), ...assetDocuments];
+        await savedAsset.save();
+      }
+    } else {
+      savedAsset = new Asset({ ...assetFields, documents: assetDocuments });
+      await savedAsset.save();
+    }
+
     await createAlert({
       title: isEdit ? 'Document Updated' : 'Document Added',
       message: isEdit
-        ? `"${newAsset.name}" was updated in your vault.`
-        : `"${newAsset.name}" was added to your vault.`,
+        ? `"${savedAsset.name}" was updated in your vault.`
+        : `"${savedAsset.name}" was added to your vault.`,
       type: 'success',
       priority: 'low',
       sent_by: userMatch.fullName || userMatch.email,
       sent_to: userMatch.customer_id,
     });
-    return expressResponse.status(201).json({ success: true, message: 'Asset successfully saved to vault.' });
+    return expressResponse.status(201).json({ success: true, message: 'Asset successfully saved to vault.', asset: savedAsset });
   } catch (serverError) {
     return expressResponse.status(500).json({ error: serverError.message });
   }
