@@ -276,6 +276,78 @@ function generateAssetSummary(asset) {
   }
   return sentences.join(' ');
 }
+function formatDateFlexible(value) {
+  if (!value || value === '-') return null;
+  const formatted = formatDate(value);
+  if (formatted) return formatted;
+  return String(value);
+}
+function generateWarrantyClaimEmail(asset, user) {
+  const name = asset.name || 'the item';
+  const seller = asset.storeOrSeller && asset.storeOrSeller !== '-' ? asset.storeOrSeller : null;
+  const issuer = asset.issuingAuthority && asset.issuingAuthority !== '-' ? asset.issuingAuthority : null;
+  const refNumber = (asset.invoiceNumber && asset.invoiceNumber !== '-' ? asset.invoiceNumber : null)
+    || (asset.documentNumber && asset.documentNumber !== '-' ? asset.documentNumber : null);
+  const purchaseDate = formatDateFlexible(asset.issueDate);
+  const expiryDate = formatDateFlexible(asset.expiryDate);
+  const value = asset.valueAmount && asset.valueAmount !== '-' ? asset.valueAmount : null;
+  const parsedValue = value != null ? parseAmount(String(value)) : null;
+
+  let warrantyStatusLine;
+  if (expiryDate) {
+    const parsedExpiry = new Date(asset.expiryDate);
+    const isValidDate = !isNaN(parsedExpiry.getTime());
+    const daysLeft = isValidDate ? daysBetween(new Date(), parsedExpiry) : null;
+    if (daysLeft != null && daysLeft >= 0) {
+      warrantyStatusLine = `The item is still within its warranty period, valid until ${expiryDate}.`;
+    } else if (daysLeft != null) {
+      warrantyStatusLine = `I understand the standard warranty period ended on ${expiryDate}; however, I would still like to request your assistance in resolving this issue under any applicable service or goodwill policy.`;
+    } else {
+      warrantyStatusLine = `The warranty on record is noted as valid until ${expiryDate}.`;
+    }
+  } else {
+    warrantyStatusLine = 'This item is registered in my records as being under warranty.';
+  }
+
+  const subjectRef = refNumber ? ` (Ref: ${refNumber})` : '';
+  const subject = `Warranty Claim Request – ${name}${subjectRef}`;
+
+  const greetingTarget = seller || issuer || 'Customer Support / Warranty Team';
+
+  const detailLines = [];
+  detailLines.push(`- Product/Item Name: ${name}`);
+  if (asset.category) detailLines.push(`- Category: ${asset.category}${asset.subCategory ? ` / ${asset.subCategory}` : ''}`);
+  if (refNumber) detailLines.push(`- Invoice/Document Number: ${refNumber}`);
+  if (purchaseDate) detailLines.push(`- Purchase Date: ${purchaseDate}`);
+  if (expiryDate) detailLines.push(`- Warranty Valid Until: ${expiryDate}`);
+  if (issuer) detailLines.push(`- Issuing Authority/Brand: ${issuer}`);
+  if (parsedValue) detailLines.push(`- Purchase Value: ${formatINR(parsedValue)}`);
+
+  const userName = (user && user.fullName) || 'Customer';
+  const userEmail = (user && user.email) || '';
+  const userPhone = (user && user.phone) || '';
+
+  const bodyParts = [];
+  bodyParts.push(`To,\n${greetingTarget}`);
+  bodyParts.push('Subject: ' + subject);
+  bodyParts.push(
+    `Dear Sir/Madam,\n\nI am writing to raise a warranty claim for my ${name}${seller ? `, purchased from ${seller}` : ''}${purchaseDate ? ` on ${purchaseDate}` : ''}. ${warrantyStatusLine}`
+  );
+  bodyParts.push(`Item / claim details:\n${detailLines.join('\n')}`);
+  bodyParts.push(
+    '[Please describe the issue you are facing with the item here — e.g. the defect, when it started, and any troubleshooting already attempted.]'
+  );
+  bodyParts.push(
+    `I would request you to kindly arrange for a repair, replacement, or servicing of the item at the earliest, in accordance with the applicable warranty terms. The purchase invoice and other supporting documents are available with me and can be shared if required.`
+  );
+  bodyParts.push('Please let me know if any further information is needed to process this claim.');
+  bodyParts.push(
+    `Regards,\n${userName}${userEmail ? `\n${userEmail}` : ''}${userPhone ? `\n${userPhone}` : ''}`
+  );
+
+  const body = bodyParts.join('\n\n');
+  return { subject, body };
+}
 module.exports = {
   formatINR,
   parseAmount,
@@ -284,4 +356,5 @@ module.exports = {
   detectIntent,
   generateReply,
   generateAssetSummary,
+  generateWarrantyClaimEmail,
 };
