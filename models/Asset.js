@@ -6,8 +6,10 @@ const serviceRecordSchema = new mongoose.Schema(
     date: { type: Date },
     cost: { type: Number, default: 0 },
     notes: { type: String, default: '-' },
-  },
-  { _id: false }
+  }
+  // Each service record now gets its own auto-generated `_id` (Mongoose's
+  // default behavior) so a single record can be targeted for edit/delete
+  // via /edit-service-record and /delete-service-record.
 );
 
 const assetSchema = new mongoose.Schema(

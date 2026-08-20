@@ -193,6 +193,51 @@ router.post('/append-service-record', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+router.put('/edit-service-record', async (req, res) => {
+  try {
+    const { assetId, recordId, title, date, cost, notes } = req.body;
+    if (!assetId || !recordId || !title || !date || !cost) {
+      return res.status(400).json({ error: 'Missing mandatory record parameters.' });
+    }
+    const asset = await Asset.findById(assetId);
+    if (!asset) {
+      return res.status(404).json({ error: 'Target asset record not found.' });
+    }
+    const record = asset.serviceRecords.id(recordId);
+    if (!record) {
+      return res.status(404).json({ error: 'Service record not found.' });
+    }
+    record.title = title;
+    record.date = new Date(date);
+    record.cost = parseFloat(cost) || 0;
+    record.notes = notes || '-';
+    await asset.save();
+    return res.status(200).json({ success: true, serviceRecords: asset.serviceRecords });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+router.delete('/delete-service-record', async (req, res) => {
+  try {
+    const { assetId, recordId } = req.body;
+    if (!assetId || !recordId) {
+      return res.status(400).json({ error: 'Asset ID and record ID are required parameters.' });
+    }
+    const asset = await Asset.findById(assetId);
+    if (!asset) {
+      return res.status(404).json({ error: 'Target asset record not found.' });
+    }
+    const record = asset.serviceRecords.id(recordId);
+    if (!record) {
+      return res.status(404).json({ error: 'Service record not found.' });
+    }
+    record.deleteOne();
+    await asset.save();
+    return res.status(200).json({ success: true, serviceRecords: asset.serviceRecords });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 router.delete('/delete-asset/:id', async (req, res) => {
   try {
     const assetId = req.params.id;
