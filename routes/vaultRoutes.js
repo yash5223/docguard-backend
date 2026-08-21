@@ -263,32 +263,41 @@ router.post('/share-document', async (req, res) => {
     if (receiverUser.customer_id === owner.customer_id) {
       return res.status(400).json({ error: "You can't share a document with yourself." });
     }
-    // Re-sharing a previously revoked asset reactivates the same history record
-    // instead of creating a duplicate, so the share's timeline stays intact.
-    const share = await SharedDocument.findOneAndUpdate(
-      {
-        ownerCustomerId: owner.customer_id,
-        receiverEmail: receiverUser.email,
-        assetId: String(assetId),
-      },
-      {
-        $set: {
-          ownerName: owner.fullName || owner.email,
-          ownerEmail: owner.email,
-          receiverCustomerId: receiverUser.customer_id,
-          receiverName: receiverUser.fullName || receiverUser.email,
-          documentPath: primaryDocumentPath,
-          documentName: documentName || asset.name,
-          category: asset.category,
-          subCategory: asset.subCategory,
-          subSubCategory: asset.subSubCategory,
-          status: 'active',
-          sharedAt: new Date(),
-          revokedAt: null,
-        },
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
+    // Every share action gets recorded as its own history row for both sides.
+    // If there's already an ACTIVE share of this asset to this receiver, don't
+    // duplicate it — just touch it. Otherwise (first time, or re-sharing after
+    // a previous revoke) create a brand new row, so past share/revoke cycles
+    // stay intact in history instead of being overwritten.
+    const existingActiveShare = await SharedDocument.findOne({
+      ownerCustomerId: owner.customer_id,
+      receiverEmail: receiverUser.email,
+      assetId: String(assetId),
+      status: 'active',
+    });
+    const shareFields = {
+      ownerCustomerId: owner.customer_id,
+      ownerName: owner.fullName || owner.email,
+      ownerEmail: owner.email,
+      receiverCustomerId: receiverUser.customer_id,
+      receiverEmail: receiverUser.email,
+      receiverName: receiverUser.fullName || receiverUser.email,
+      assetId: String(assetId),
+      documentPath: primaryDocumentPath,
+      documentName: documentName || asset.name,
+      category: asset.category,
+      subCategory: asset.subCategory,
+      subSubCategory: asset.subSubCategory,
+      status: 'active',
+      sharedAt: new Date(),
+      revokedAt: null,
+    };
+    let share;
+    if (existingActiveShare) {
+      existingActiveShare.set(shareFields);
+      share = await existingActiveShare.save();
+    } else {
+      share = await SharedDocument.create(shareFields);
+    }
     // Notify the receiver that a document was shared with them.
     await createAlert({
       title: 'Document Shared With You',

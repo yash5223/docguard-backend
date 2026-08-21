@@ -28,11 +28,14 @@ const SharedDocumentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Prevent the exact same asset from being shared to the same receiver twice.
-// (One asset = one share record, regardless of how many document files it holds.)
+// Only one ACTIVE share of a given asset to a given receiver is allowed at a
+// time (a partial unique index — it ignores revoked rows), so re-sharing
+// while already active won't create a duplicate. Once revoked, that row is
+// just history: sharing the same asset again creates a brand new row, so
+// every share/revoke cycle is preserved for both sender and receiver.
 SharedDocumentSchema.index(
   { ownerCustomerId: 1, receiverEmail: 1, assetId: 1 },
-  { unique: true }
+  { unique: true, partialFilterExpression: { status: 'active' } }
 );
 
 module.exports = mongoose.model('SharedDocument', SharedDocumentSchema);
