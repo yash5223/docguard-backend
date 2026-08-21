@@ -320,7 +320,7 @@ router.post('/share-document', async (req, res) => {
   }
 });
 
-// 6b. FETCH THE FULL ASSET BEHIND A SHARE (view-only — used by the receiver's "View" button)
+// 6b. FETCH THE FULL ASSET BEHIND A SHARE (view-only — used by the "View" button)
 router.get('/shared-asset/:assetId', async (req, res) => {
   try {
     const { assetId } = req.params;
@@ -328,27 +328,32 @@ router.get('/shared-asset/:assetId', async (req, res) => {
     if (!email) {
       return res.status(400).json({ error: 'Email parameter is required.' });
     }
-    const receiver = await User.findOne({ email: email.toLowerCase().trim() });
-    if (!receiver) {
+    const requester = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!requester) {
       return res.status(404).json({ error: 'User account profile not found.' });
-    }
-    // Only allow access if this asset was actively shared with the requesting user
-    // (or the requesting user is the owner, e.g. viewing their own sent share).
-    const share = await SharedDocument.findOne({
-      assetId: String(assetId),
-      status: 'active',
-      $or: [{ receiverCustomerId: receiver.customer_id }, { ownerCustomerId: receiver.customer_id }],
-    });
-    if (!share) {
-      return res.status(403).json({ error: 'This document is not shared with you.' });
     }
     const asset = await Asset.findById(assetId);
     if (!asset) {
       return res.status(404).json({ error: 'This document is no longer available.' });
     }
-    // viewOnly always true from this endpoint — the receiver (or a re-viewing sender)
-    // can look at every field, but the client must not expose edit/add/delete actions.
-    return res.status(200).json({ success: true, asset, viewOnly: true });
+    // The owner can always view their own asset, whether or not the share is
+    // still active. A receiver, however, only gets access while the share is
+    // active — once the owner stops sharing, the receiver loses the view.
+    const isOwner = asset.userId === requester.customer_id;
+    if (!isOwner) {
+      const activeShare = await SharedDocument.findOne({
+        assetId: String(assetId),
+        receiverCustomerId: requester.customer_id,
+        status: 'active',
+      });
+      if (!activeShare) {
+        return res.status(403).json({ error: 'This document is no longer shared with you.' });
+      }
+    }
+    // viewOnly always true from this endpoint — the receiver (or a re-viewing
+    // sender) can look at every field, but the client must not expose
+    // edit/add/delete actions unless the requester is actually the owner.
+    return res.status(200).json({ success: true, asset, viewOnly: !isOwner });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
