@@ -215,14 +215,6 @@ function serializeShare(share) {
     category: share.category,
     subCategory: share.subCategory,
     subSubCategory: share.subSubCategory,
-    issueDate: share.issueDate,
-    notesOrAddress: share.notesOrAddress,
-    storeOrSeller: share.storeOrSeller,
-    documentNumber: share.documentNumber,
-    issuingAuthority: share.issuingAuthority,
-    expiryDate: share.expiryDate,
-    valueAmount: share.valueAmount,
-    invoiceNumber: share.invoiceNumber,
     ownerName: share.ownerName,
     ownerEmail: share.ownerEmail,
     receiverName: share.receiverName,
@@ -233,15 +225,15 @@ function serializeShare(share) {
   };
 }
 
-// 6. SHARE A DOCUMENT WITH ANOTHER USER
+// 6. SHARE A DOCUMENT (ASSET) WITH ANOTHER USER
 router.post('/share-document', async (req, res) => {
   try {
     const { email, password, assetId, documentPath, documentName, receiver } = req.body;
     if (!email || !password) {
       return res.status(401).json({ error: 'Authentication credentials required.' });
     }
-    if (!assetId || !documentPath || !receiver) {
-      return res.status(400).json({ error: 'Asset, document and receiver are required.' });
+    if (!assetId || !receiver) {
+      return res.status(400).json({ error: 'Asset and receiver are required.' });
     }
     const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
@@ -255,9 +247,12 @@ router.post('/share-document', async (req, res) => {
     if (!asset) {
       return res.status(404).json({ error: 'Document not found in your vault.' });
     }
-    if (!(asset.documents || []).includes(documentPath)) {
-      return res.status(404).json({ error: 'Document not found in your vault.' });
-    }
+    // The whole asset is shared as a single unit — documentPath (if provided) is
+    // only kept around for a display thumbnail, it no longer identifies the share.
+    const primaryDocumentPath =
+      documentPath && (asset.documents || []).includes(documentPath)
+        ? documentPath
+        : (asset.documents || []).find((d) => d && d !== '-') || '';
     const receiverKey = receiver.trim().toLowerCase();
     const receiverUser = await User.findOne({
       $or: [{ email: receiverKey }, { phone: receiver.trim() }],
@@ -268,14 +263,13 @@ router.post('/share-document', async (req, res) => {
     if (receiverUser.customer_id === owner.customer_id) {
       return res.status(400).json({ error: "You can't share a document with yourself." });
     }
-    // Re-sharing a previously revoked document reactivates the same history record
+    // Re-sharing a previously revoked asset reactivates the same history record
     // instead of creating a duplicate, so the share's timeline stays intact.
     const share = await SharedDocument.findOneAndUpdate(
       {
         ownerCustomerId: owner.customer_id,
         receiverEmail: receiverUser.email,
         assetId: String(assetId),
-        documentPath,
       },
       {
         $set: {
@@ -283,18 +277,11 @@ router.post('/share-document', async (req, res) => {
           ownerEmail: owner.email,
           receiverCustomerId: receiverUser.customer_id,
           receiverName: receiverUser.fullName || receiverUser.email,
+          documentPath: primaryDocumentPath,
           documentName: documentName || asset.name,
           category: asset.category,
           subCategory: asset.subCategory,
           subSubCategory: asset.subSubCategory,
-          issueDate: asset.issueDate,
-          notesOrAddress: asset.notesOrAddress,
-          storeOrSeller: asset.storeOrSeller,
-          documentNumber: asset.documentNumber,
-          issuingAuthority: asset.issuingAuthority,
-          expiryDate: asset.expiryDate,
-          valueAmount: asset.valueAmount,
-          invoiceNumber: asset.invoiceNumber,
           status: 'active',
           sharedAt: new Date(),
           revokedAt: null,
@@ -329,6 +316,40 @@ router.post('/share-document', async (req, res) => {
       // record already exists, so treat it as a successful share.
       return res.status(200).json({ success: true, message: 'Document shared successfully.' });
     }
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 6b. FETCH THE FULL ASSET BEHIND A SHARE (view-only — used by the receiver's "View" button)
+router.get('/shared-asset/:assetId', async (req, res) => {
+  try {
+    const { assetId } = req.params;
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const receiver = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!receiver) {
+      return res.status(404).json({ error: 'User account profile not found.' });
+    }
+    // Only allow access if this asset was actively shared with the requesting user
+    // (or the requesting user is the owner, e.g. viewing their own sent share).
+    const share = await SharedDocument.findOne({
+      assetId: String(assetId),
+      status: 'active',
+      $or: [{ receiverCustomerId: receiver.customer_id }, { ownerCustomerId: receiver.customer_id }],
+    });
+    if (!share) {
+      return res.status(403).json({ error: 'This document is not shared with you.' });
+    }
+    const asset = await Asset.findById(assetId);
+    if (!asset) {
+      return res.status(404).json({ error: 'This document is no longer available.' });
+    }
+    // viewOnly always true from this endpoint — the receiver (or a re-viewing sender)
+    // can look at every field, but the client must not expose edit/add/delete actions.
+    return res.status(200).json({ success: true, asset, viewOnly: true });
+  } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 });

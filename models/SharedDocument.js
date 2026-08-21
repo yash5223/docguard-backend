@@ -10,26 +10,16 @@ const SharedDocumentSchema = new mongoose.Schema(
     receiverEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
     receiverName: { type: String, default: '' },
 
+    // A share now refers to the whole asset (which can contain several
+    // document files), not a single file path. documentPath is kept for
+    // backward compatibility / display (e.g. thumbnail) but is optional.
     assetId: { type: String, required: true },
-    documentPath: { type: String, required: true },
+    documentPath: { type: String, default: '' },
     documentName: { type: String, default: '' },
 
     category: { type: String, default: '' },
     subCategory: { type: String, default: '' },
     subSubCategory: { type: String, default: '' },
-
-    // Snapshot of the asset's document-detail fields at the time of sharing,
-    // so the receiver can see the full "Database Information" for the
-    // document (issue date, notes/address, value, etc.) without needing
-    // access to the owner's asset record.
-    issueDate: { type: Date, default: null },
-    notesOrAddress: { type: String, default: '' },
-    storeOrSeller: { type: String, default: '' },
-    documentNumber: { type: String, default: '' },
-    issuingAuthority: { type: String, default: '' },
-    expiryDate: { type: String, default: '' },
-    valueAmount: { type: String, default: '' },
-    invoiceNumber: { type: String, default: '' },
 
     status: { type: String, enum: ['active', 'revoked'], default: 'active', index: true },
     sharedAt: { type: Date, default: Date.now },
@@ -38,9 +28,10 @@ const SharedDocumentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Prevent the exact same document from being shared to the same receiver twice
+// Prevent the exact same asset from being shared to the same receiver twice.
+// (One asset = one share record, regardless of how many document files it holds.)
 SharedDocumentSchema.index(
-  { ownerCustomerId: 1, receiverEmail: 1, assetId: 1, documentPath: 1 },
+  { ownerCustomerId: 1, receiverEmail: 1, assetId: 1 },
   { unique: true }
 );
 
