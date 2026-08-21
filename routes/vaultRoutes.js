@@ -321,9 +321,30 @@ router.post('/share-document', async (req, res) => {
     return res.status(201).json({ success: true, message: 'Document shared successfully.', share: serializeShare(share) });
   } catch (err) {
     if (err && err.code === 11000) {
-      // Rare race on the unique (owner, receiver, asset, document) index — the
-      // record already exists, so treat it as a successful share.
-      return res.status(200).json({ success: true, message: 'Document shared successfully.' });
+      // Only the ACTIVE-share uniqueness should ever legitimately race here
+      // (two share taps at once). Fetch that active row and return it, rather
+      // than silently pretending the request succeeded with no data to show.
+      try {
+        const { email, assetId, receiver } = req.body;
+        const owner = await User.findOne({ email: (email || '').toLowerCase().trim() });
+        const receiverUser = await User.findOne({
+          $or: [{ email: (receiver || '').trim().toLowerCase() }, { phone: (receiver || '').trim() }],
+        });
+        const existing = owner && receiverUser
+          ? await SharedDocument.findOne({
+            ownerCustomerId: owner.customer_id,
+            receiverEmail: receiverUser.email,
+            assetId: String(assetId),
+            status: 'active',
+          })
+          : null;
+        if (existing) {
+          return res.status(200).json({ success: true, message: 'Document shared successfully.', share: serializeShare(existing) });
+        }
+      } catch (_) {
+        // fall through to the generic error below
+      }
+      return res.status(409).json({ error: 'This document is already actively shared with that person.' });
     }
     return res.status(500).json({ error: err.message });
   }

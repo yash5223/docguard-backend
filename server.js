@@ -28,7 +28,23 @@ mongoose.set('bufferTimeoutMS', 8000);
 mongoose.connect(MONGODB_URI, {
   serverSelectionTimeoutMS: 8000, 
 })
-  .then(() => console.log('Connected to MongoDB Atlas'))
+  .then(async () => {
+    console.log('Connected to MongoDB Atlas');
+    // Keep every model's indexes in sync with its schema. This matters a lot
+    // for SharedDocument: an older deploy created a FULLY unique index on
+    // (ownerCustomerId, receiverEmail, assetId), which silently blocked a
+    // document from ever being shared to the same person a second time
+    // (even after being revoked). The current schema only wants that
+    // uniqueness enforced among ACTIVE shares (a partial index), so on boot
+    // we drop the stale index and rebuild the correct one automatically.
+    try {
+      const SharedDocument = require('./models/SharedDocument');
+      await SharedDocument.syncIndexes();
+      console.log('SharedDocument indexes synced.');
+    } catch (indexErr) {
+      console.error('Failed to sync SharedDocument indexes:', indexErr);
+    }
+  })
   .catch((err) => console.error('Connection error:', err));
 app.get('/', (req, res) => {
   res.send('Server is running');
