@@ -359,7 +359,7 @@ router.get('/shared-asset/:assetId', async (req, res) => {
   }
 });
 
-// 7. LIST DOCUMENTS SHARED WITH THE CURRENT USER (received — active shares only)
+// 7. LIST DOCUMENTS SHARED WITH THE CURRENT USER (received — includes history of revoked shares)
 router.get('/shared-with-me', async (req, res) => {
   try {
     const { email } = req.query;
@@ -372,7 +372,6 @@ router.get('/shared-with-me', async (req, res) => {
     }
     const shares = await SharedDocument.find({
       $or: [{ receiverCustomerId: user.customer_id }, { receiverEmail: user.email }],
-      status: 'active',
     }).sort({ sharedAt: -1 });
     return res.status(200).json({ success: true, documents: shares.map(serializeShare) });
   } catch (err) {
