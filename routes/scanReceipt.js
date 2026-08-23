@@ -3,11 +3,23 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
+const { requireAuth } = require('../utils/auth');
+const { sendServerError } = require('../utils/errors');
 const uploadDir = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(uploadDir)) { 
   fs.mkdirSync(uploadDir, { recursive: true }); 
 }
-const upload = multer({ dest: uploadDir });
+const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+const upload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
+      return cb(new Error('Unsupported file type. Only images are allowed.'));
+    }
+    cb(null, true);
+  },
+});
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434/api/generate';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
 function extract(regex, text) {
@@ -118,7 +130,7 @@ function parseInvoice(text) {
     specField2: extract(/(?:RERA|Khata|VIN|Mileage|Serial Number|S\/N|Weight|Material)\s*[: ]\s*([A-Za-z0-9,.\- ]+)/i, text)
   };
 }
-router.post('/scan-receipt', upload.single('image'), async (req, res) => {
+router.post('/scan-receipt', requireAuth, upload.single('image'), async (req, res) => {
   const sharp = require('sharp');
   const Tesseract = require('tesseract.js');
   let processedImagePath = null;
@@ -198,7 +210,7 @@ router.post('/scan-receipt', upload.single('image'), async (req, res) => {
   } catch (err) {
     if (req.file && fs.existsSync(req.file.path)) fs.unlink(req.file.path, () => {});
     if (processedImagePath && fs.existsSync(processedImagePath)) fs.unlink(processedImagePath, () => {});
-    return res.status(500).json({ error: err.message });
+    return sendServerError(res, err, 'scan-receipt');
   }
 });
 module.exports = router;

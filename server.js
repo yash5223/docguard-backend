@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const helmet = require('helmet');
+const mongoSanitize = require('express-mongo-sanitize');
 const userRoutes = require('./routes/userRoutes');
 const scanReceiptRoutes = require('./routes/scanReceipt');
 const assetRoutes = require('./routes/assetRoutes');
@@ -9,34 +11,66 @@ const vaultRoutes = require('./routes/vaultRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const { router: alertRoutes } = require('./routes/alertRoutes');
 const Invite = require('./models/Invite');
+
+// Fail fast on boot if required secrets aren't configured, instead of
+// silently running with an insecure default.
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  console.error('FATAL: JWT_SECRET is missing or shorter than 32 characters. Set it in your .env before starting the server.');
+  process.exit(1);
+}
+
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.set('trust proxy', 1);
+app.use(helmet());
+
+// CORS: only relevant to browser (web build) callers — native mobile
+// requests don't send an Origin header at all. Restrict to known origins
+// in production via ALLOWED_ORIGINS; fall back to allowing everything only
+// when explicitly running in development.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true); // no Origin header (mobile apps, curl, server-to-server)
+    if (allowedOrigins.length === 0) {
+      if (process.env.NODE_ENV === 'production') {
+        console.warn(`[CORS] Blocked browser request from ${origin} — set ALLOWED_ORIGINS in .env to allow your web app's domain.`);
+        return callback(new Error('Not allowed by CORS'));
+      }
+      return callback(null, true); // dev convenience only
+    }
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
+}));
+
+app.use(express.json({ limit: '2mb' }));
+app.use(mongoSanitize()); // strips `$`/`.` keys from body/query/params to block NoSQL-injection-style payloads
+
 app.use((req, res, next) => {
-  console.log(`[${req.method}] ${req.url}`);
+  // Log method + path only — the old logger also printed the full query
+  // string, which leaked emails/tokens into server logs.
+  console.log(`[${req.method}] ${req.path}`);
   next();
 });
+
 app.use('/api/users', userRoutes);
 app.use('/api/receipt', scanReceiptRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/vault', vaultRoutes);
-app.use('/api/ai', aiRoutes); 
+app.use('/api/ai', aiRoutes);
 app.use('/api/alerts', alertRoutes);
+
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 mongoose.set('bufferTimeoutMS', 8000);
 mongoose.connect(MONGODB_URI, {
-  serverSelectionTimeoutMS: 8000, 
+  serverSelectionTimeoutMS: 8000,
 })
   .then(async () => {
     console.log('Connected to MongoDB Atlas');
-    // Keep every model's indexes in sync with its schema. This matters a lot
-    // for SharedDocument: an older deploy created a FULLY unique index on
-    // (ownerCustomerId, receiverEmail, assetId), which silently blocked a
-    // document from ever being shared to the same person a second time
-    // (even after being revoked). The current schema only wants that
-    // uniqueness enforced among ACTIVE shares (a partial index), so on boot
-    // we drop the stale index and rebuild the correct one automatically.
     try {
       const SharedDocument = require('./models/SharedDocument');
       await SharedDocument.syncIndexes();
@@ -46,9 +80,11 @@ mongoose.connect(MONGODB_URI, {
     }
   })
   .catch((err) => console.error('Connection error:', err));
+
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
+
 app.get('/join/:token', async (req, res) => {
   const { token } = req.params;
   let statusMessage = 'This invite link is invalid.';
@@ -66,6 +102,7 @@ app.get('/join/:token', async (req, res) => {
       }
     }
   } catch (err) {
+    console.error('[join] lookup failed:', err);
     statusMessage = 'Something went wrong checking this invite.';
   }
   const deepLink = `docguard://join/${token}`;
@@ -113,9 +150,22 @@ app.get('/join/:token', async (req, res) => {
 </body>
 </html>`);
 });
+
+// Catches multer file-type/size rejections and any other error that bubbles
+// up without a route-level handler, so a stack trace never reaches the
+// client.
+app.use((err, req, res, next) => {
+  if (err && err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ error: 'This origin is not allowed to access the API.' });
+  }
+  console.error('[unhandled]', err);
+  res.status(err && err.status ? err.status : 400).json({ error: (err && err.message) || 'Request failed.' });
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
+
 const selfUrl = process.env.RENDER_EXTERNAL_URL;
 if (selfUrl) {
   const PING_INTERVAL_MS = 10 * 60 * 1000;
