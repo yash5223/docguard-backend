@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const router = express.Router();
 const User = require('../models/User');
 const Invite = require('../models/Invite');
@@ -7,10 +8,7 @@ const VaultMember = require('../models/VaultMember');
 const Asset = require('../models/Asset');
 const SharedDocument = require('../models/SharedDocument');
 const { createAlert } = require('./alertRoutes');
-const { requireAuth } = require('../utils/auth');
-const { sendServerError } = require('../utils/errors');
 const INVITE_EXPIRY_DAYS = 7;
-
 function buildInviteLink(token, req) {
   const configuredBase = process.env.JOIN_LINK_BASE;
   if (configuredBase) {
@@ -31,39 +29,22 @@ function serializeInvite(invite, req) {
     expiresAt: invite.expiresAt
   };
 }
-function serializeShare(share) {
-  return {
-    id: share._id,
-    assetId: share.assetId,
-    documentPath: share.documentPath,
-    documentName: share.documentName,
-    category: share.category,
-    subCategory: share.subCategory,
-    subSubCategory: share.subSubCategory,
-    ownerName: share.ownerName,
-    ownerEmail: share.ownerEmail,
-    receiverName: share.receiverName,
-    receiverEmail: share.receiverEmail,
-    status: share.status || 'active',
-    sharedAt: share.sharedAt,
-    revokedAt: share.revokedAt || null,
-  };
-}
-
-// Every route below requires a valid session token; identity always comes
-// from req.userId / req.customerId (from the verified token), never from a
-// client-supplied email/id.
-router.use(requireAuth);
-
 router.post('/create-invite', async (req, res) => {
   try {
-    const { role } = req.body;
+    const { email, password, role } = req.body;
+    if (!email || !password) {
+      return res.status(401).json({ error: 'Authentication credentials required.' });
+    }
     if (!['view', 'edit', 'admin'].includes(role)) {
       return res.status(400).json({ error: 'Role must be view, edit, or admin.' });
     }
-    const owner = await User.findById(req.userId);
+    const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(401).json({ error: 'Invalid user account credentials.' });
+    }
+    const isPasswordValid = await bcrypt.compare(password, owner.passwordHash);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Invalid user account credentials.' });
     }
     const token = crypto.randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -75,15 +56,18 @@ router.post('/create-invite', async (req, res) => {
     });
     return res.status(201).json({ success: true, invite: serializeInvite(invite, req) });
   } catch (err) {
-    return sendServerError(res, err, 'create-invite');
+    return res.status(500).json({ error: err.message });
   }
 });
-
 router.get('/invites', async (req, res) => {
   try {
-    const owner = await User.findById(req.userId);
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     await Invite.updateMany(
       { ownerCustomerId: owner.customer_id, status: 'pending', expiresAt: { $lt: new Date() } },
@@ -95,16 +79,19 @@ router.get('/invites', async (req, res) => {
     }).sort({ createdAt: -1 });
     return res.status(200).json({ success: true, invites: invites.map(inv => serializeInvite(inv, req)) });
   } catch (err) {
-    return sendServerError(res, err, 'invites');
+    return res.status(500).json({ error: err.message });
   }
 });
-
 router.delete('/invites/:token', async (req, res) => {
   try {
+    const { email } = req.query;
     const { token } = req.params;
-    const owner = await User.findById(req.userId);
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     const invite = await Invite.findOne({ token, ownerCustomerId: owner.customer_id });
     if (!invite) {
@@ -113,19 +100,22 @@ router.delete('/invites/:token', async (req, res) => {
     await Invite.deleteOne({ _id: invite._id });
     return res.status(200).json({ success: true, message: 'Invite revoked.' });
   } catch (err) {
-    return sendServerError(res, err, 'delete-invite');
+    return res.status(500).json({ error: err.message });
   }
 });
-
 router.post('/join', async (req, res) => {
   try {
-    const { token } = req.body;
-    if (!token) {
-      return res.status(400).json({ error: 'Token is required.' });
+    const { token, email, password } = req.body;
+    if (!token || !email || !password) {
+      return res.status(400).json({ error: 'Token, email and password are required.' });
     }
-    const joiner = await User.findById(req.userId);
+    const joiner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!joiner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(401).json({ error: 'Invalid user account credentials.' });
+    }
+    const isPasswordValid = await bcrypt.compare(password, joiner.passwordHash);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Invalid user account credentials.' });
     }
     const invite = await Invite.findOne({ token });
     if (!invite || invite.status !== 'pending') {
@@ -166,15 +156,19 @@ router.post('/join', async (req, res) => {
       vault: { ownerCustomerId: invite.ownerCustomerId, ownerName: owner ? owner.fullName : '', role: invite.role }
     });
   } catch (err) {
-    return sendServerError(res, err, 'join');
+    return res.status(500).json({ error: err.message });
   }
 });
-
+// 5. LIST MEMBERS OF A VAULT
 router.get('/members', async (req, res) => {
   try {
-    const owner = await User.findById(req.userId);
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     const members = await VaultMember.find({ ownerCustomerId: owner.customer_id }).sort({ joinedAt: -1 });
     return res.status(200).json({
@@ -188,16 +182,19 @@ router.get('/members', async (req, res) => {
       }))
     });
   } catch (err) {
-    return sendServerError(res, err, 'members');
+    return res.status(500).json({ error: err.message });
   }
 });
-
 router.delete('/members/:id', async (req, res) => {
   try {
+    const { email } = req.query;
     const { id } = req.params;
-    const owner = await User.findById(req.userId);
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     const member = await VaultMember.findOne({ _id: id, ownerCustomerId: owner.customer_id });
     if (!member) {
@@ -206,31 +203,59 @@ router.delete('/members/:id', async (req, res) => {
     await VaultMember.deleteOne({ _id: member._id });
     return res.status(200).json({ success: true, message: 'Member removed.' });
   } catch (err) {
-    return sendServerError(res, err, 'delete-member');
+    return res.status(500).json({ error: err.message });
   }
 });
+function serializeShare(share) {
+  return {
+    id: share._id,
+    assetId: share.assetId,
+    documentPath: share.documentPath,
+    documentName: share.documentName,
+    category: share.category,
+    subCategory: share.subCategory,
+    subSubCategory: share.subSubCategory,
+    ownerName: share.ownerName,
+    ownerEmail: share.ownerEmail,
+    receiverName: share.receiverName,
+    receiverEmail: share.receiverEmail,
+    status: share.status || 'active',
+    sharedAt: share.sharedAt,
+    revokedAt: share.revokedAt || null,
+  };
+}
 
+// 6. SHARE A DOCUMENT (ASSET) WITH ANOTHER USER
 router.post('/share-document', async (req, res) => {
   try {
-    const { assetId, documentPath, documentName, receiver } = req.body;
+    const { email, password, assetId, documentPath, documentName, receiver } = req.body;
+    if (!email || !password) {
+      return res.status(401).json({ error: 'Authentication credentials required.' });
+    }
     if (!assetId || !receiver) {
       return res.status(400).json({ error: 'Asset and receiver are required.' });
     }
-    const owner = await User.findById(req.userId);
+    const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(401).json({ error: 'Invalid user account credentials.' });
+    }
+    const isPasswordValid = await bcrypt.compare(password, owner.passwordHash);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Invalid user account credentials.' });
     }
     const asset = await Asset.findOne({ _id: assetId, userId: owner.customer_id });
     if (!asset) {
       return res.status(404).json({ error: 'Document not found in your vault.' });
     }
+    // The whole asset is shared as a single unit — documentPath (if provided) is
+    // only kept around for a display thumbnail, it no longer identifies the share.
     const primaryDocumentPath =
       documentPath && (asset.documents || []).includes(documentPath)
         ? documentPath
         : (asset.documents || []).find((d) => d && d !== '-') || '';
-    const receiverKey = String(receiver).trim().toLowerCase();
+    const receiverKey = receiver.trim().toLowerCase();
     const receiverUser = await User.findOne({
-      $or: [{ email: receiverKey }, { phone: String(receiver).trim() }],
+      $or: [{ email: receiverKey }, { phone: receiver.trim() }],
     });
     if (!receiverUser) {
       return res.status(404).json({ error: 'No DocGuard account was found with that email or phone number.' });
@@ -238,6 +263,11 @@ router.post('/share-document', async (req, res) => {
     if (receiverUser.customer_id === owner.customer_id) {
       return res.status(400).json({ error: "You can't share a document with yourself." });
     }
+    // Every share action gets recorded as its own history row for both sides.
+    // If there's already an ACTIVE share of this asset to this receiver, don't
+    // duplicate it — just touch it. Otherwise (first time, or re-sharing after
+    // a previous revoke) create a brand new row, so past share/revoke cycles
+    // stay intact in history instead of being overwritten.
     const existingActiveShare = await SharedDocument.findOne({
       ownerCustomerId: owner.customer_id,
       receiverEmail: receiverUser.email,
@@ -268,6 +298,7 @@ router.post('/share-document', async (req, res) => {
     } else {
       share = await SharedDocument.create(shareFields);
     }
+    // Notify the receiver that a document was shared with them.
     await createAlert({
       title: 'Document Shared With You',
       message: `${owner.fullName || owner.email} shared "${documentName || asset.name}" with you.`,
@@ -277,6 +308,7 @@ router.post('/share-document', async (req, res) => {
       sent_to: receiverUser.customer_id,
       related_asset_id: String(assetId),
     });
+    // Notify the sender/owner as confirmation that the share went through.
     await createAlert({
       title: 'Document Shared',
       message: `You shared "${documentName || asset.name}" with ${receiverUser.fullName || receiverUser.email}.`,
@@ -289,9 +321,12 @@ router.post('/share-document', async (req, res) => {
     return res.status(201).json({ success: true, message: 'Document shared successfully.', share: serializeShare(share) });
   } catch (err) {
     if (err && err.code === 11000) {
+      // Only the ACTIVE-share uniqueness should ever legitimately race here
+      // (two share taps at once). Fetch that active row and return it, rather
+      // than silently pretending the request succeeded with no data to show.
       try {
-        const owner = await User.findById(req.userId);
-        const { assetId, receiver } = req.body;
+        const { email, assetId, receiver } = req.body;
+        const owner = await User.findOne({ email: (email || '').toLowerCase().trim() });
         const receiverUser = await User.findOne({
           $or: [{ email: (receiver || '').trim().toLowerCase() }, { phone: (receiver || '').trim() }],
         });
@@ -311,21 +346,29 @@ router.post('/share-document', async (req, res) => {
       }
       return res.status(409).json({ error: 'This document is already actively shared with that person.' });
     }
-    return sendServerError(res, err, 'share-document');
+    return res.status(500).json({ error: err.message });
   }
 });
 
+// 6b. FETCH THE FULL ASSET BEHIND A SHARE (view-only — used by the "View" button)
 router.get('/shared-asset/:assetId', async (req, res) => {
   try {
     const { assetId } = req.params;
-    const requester = await User.findById(req.userId);
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const requester = await User.findOne({ email: email.toLowerCase().trim() });
     if (!requester) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     const asset = await Asset.findById(assetId);
     if (!asset) {
       return res.status(404).json({ error: 'This document is no longer available.' });
     }
+    // The owner can always view their own asset, whether or not the share is
+    // still active. A receiver, however, only gets access while the share is
+    // active — once the owner stops sharing, the receiver loses the view.
     const isOwner = asset.userId === requester.customer_id;
     if (!isOwner) {
       const activeShare = await SharedDocument.findOne({
@@ -337,46 +380,64 @@ router.get('/shared-asset/:assetId', async (req, res) => {
         return res.status(403).json({ error: 'This document is no longer shared with you.' });
       }
     }
+    // viewOnly always true from this endpoint — the receiver (or a re-viewing
+    // sender) can look at every field, but the client must not expose
+    // edit/add/delete actions unless the requester is actually the owner.
     return res.status(200).json({ success: true, asset, viewOnly: !isOwner });
   } catch (err) {
-    return sendServerError(res, err, 'shared-asset');
+    return res.status(500).json({ error: err.message });
   }
 });
 
+// 7. LIST DOCUMENTS SHARED WITH THE CURRENT USER (received — includes history of revoked shares)
 router.get('/shared-with-me', async (req, res) => {
   try {
-    const user = await User.findById(req.userId);
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     const shares = await SharedDocument.find({
       $or: [{ receiverCustomerId: user.customer_id }, { receiverEmail: user.email }],
     }).sort({ sharedAt: -1 });
     return res.status(200).json({ success: true, documents: shares.map(serializeShare) });
   } catch (err) {
-    return sendServerError(res, err, 'shared-with-me');
+    return res.status(500).json({ error: err.message });
   }
 });
 
+// 8. LIST DOCUMENTS THE CURRENT USER HAS SHARED OUT (sent — includes history of revoked shares)
 router.get('/shared-by-me', async (req, res) => {
   try {
-    const owner = await User.findById(req.userId);
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     const shares = await SharedDocument.find({ ownerCustomerId: owner.customer_id }).sort({ sharedAt: -1 });
     return res.status(200).json({ success: true, documents: shares.map(serializeShare) });
   } catch (err) {
-    return sendServerError(res, err, 'shared-by-me');
+    return res.status(500).json({ error: err.message });
   }
 });
 
+// 9. REVOKE A SHARE (stop sharing a document, keeping it in history)
 router.delete('/shared/:id', async (req, res) => {
   try {
+    const { email } = req.query;
     const { id } = req.params;
-    const owner = await User.findById(req.userId);
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const owner = await User.findOne({ email: email.toLowerCase().trim() });
     if (!owner) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     const share = await SharedDocument.findOne({ _id: id, ownerCustomerId: owner.customer_id });
     if (!share) {
@@ -386,6 +447,7 @@ router.delete('/shared/:id', async (req, res) => {
     share.revokedAt = new Date();
     await share.save();
 
+    // Notify the receiver that access to the document has been revoked.
     if (share.receiverCustomerId) {
       await createAlert({
         title: 'Document Access Revoked',
@@ -397,6 +459,7 @@ router.delete('/shared/:id', async (req, res) => {
         related_asset_id: share.assetId,
       });
     }
+    // Notify the owner/sender as confirmation that sharing was stopped.
     await createAlert({
       title: 'Stopped Sharing Document',
       message: `You stopped sharing "${share.documentName}" with ${share.receiverName || share.receiverEmail}.`,
@@ -409,20 +472,22 @@ router.delete('/shared/:id', async (req, res) => {
 
     return res.status(200).json({ success: true, message: 'Stopped sharing this document.', share: serializeShare(share) });
   } catch (err) {
-    return sendServerError(res, err, 'revoke-share');
+    return res.status(500).json({ error: err.message });
   }
 });
 
-async function resolveVaultAccess(requesterCustomerId, vaultOwnerCustomerId) {
-  if (!vaultOwnerCustomerId || vaultOwnerCustomerId === requesterCustomerId) {
-    return { ownerCustomerId: requesterCustomerId, role: 'admin' };
+async function resolveVaultAccess(email, vaultOwnerCustomerId) {
+  const requester = await User.findOne({ email: email.toLowerCase().trim() });
+  if (!requester) return null;
+  if (!vaultOwnerCustomerId || vaultOwnerCustomerId === requester.customer_id) {
+    return { ownerCustomerId: requester.customer_id, role: 'admin', requester };
   }
   const membership = await VaultMember.findOne({
     ownerCustomerId: vaultOwnerCustomerId,
-    memberCustomerId: requesterCustomerId
+    memberCustomerId: requester.customer_id
   });
   if (!membership) return null;
-  return { ownerCustomerId: vaultOwnerCustomerId, role: membership.role };
+  return { ownerCustomerId: vaultOwnerCustomerId, role: membership.role, requester };
 }
 module.exports = router;
 module.exports.resolveVaultAccess = resolveVaultAccess;

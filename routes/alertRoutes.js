@@ -2,8 +2,6 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const Alert = require('../models/Alert');
-const { requireAuth } = require('../utils/auth');
-const { sendServerError } = require('../utils/errors');
 
 async function createAlert({ title, message, type = 'info', priority = 'medium', sent_by = 'System', sent_to, related_asset_id = null }) {
   try {
@@ -63,38 +61,32 @@ async function checkExpiryAlerts(userMatch, assets) {
   }
 }
 
-router.get('/fetch-alerts', requireAuth, async (req, res) => {
+router.get('/fetch-alerts', async (req, res) => {
   try {
-    const userMatch = await User.findById(req.userId);
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter is required.' });
+    }
+    const userMatch = await User.findOne({ email: email.toLowerCase().trim() });
     if (!userMatch) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'User account profile not found.' });
     }
     const alerts = await Alert.find({ sent_to: userMatch.customer_id }).sort({ created_at: -1 });
     return res.status(200).json({ success: true, alerts });
   } catch (err) {
-    return sendServerError(res, err, 'fetch-alerts');
+    return res.status(500).json({ error: err.message });
   }
 });
 
-router.patch('/mark-read/:id', requireAuth, async (req, res) => {
+router.patch('/mark-read/:id', async (req, res) => {
   try {
-    const userMatch = await User.findById(req.userId);
-    if (!userMatch) {
-      return res.status(404).json({ error: 'Account not found.' });
-    }
-    // Ownership check — an alert can only be marked read by the account it
-    // was sent to, not by guessing another user's alert id.
-    const alert = await Alert.findOneAndUpdate(
-      { _id: req.params.id, sent_to: userMatch.customer_id },
-      { is_read: true },
-      { new: true }
-    );
+    const alert = await Alert.findByIdAndUpdate(req.params.id, { is_read: true }, { new: true });
     if (!alert) {
       return res.status(404).json({ error: 'Alert not found.' });
     }
     return res.status(200).json({ success: true, alert });
   } catch (err) {
-    return sendServerError(res, err, 'mark-read');
+    return res.status(500).json({ error: err.message });
   }
 });
 
